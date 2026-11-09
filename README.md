@@ -6,6 +6,28 @@ Transcreve o áudio de uma aula no próprio PC, com o [faster-whisper](https://g
 
 > **Antes de gravar:** é preciso ter permissão para gravar e para transcrever uma aula. Combine com quem dá a aula e respeite as regras da instituição.
 
+## Uso
+
+```text
+transcrever aula.mp3                           # cria aula.txt ao lado do áudio
+transcrever aula.mp3 --saida anotacoes.txt     # escolhe o arquivo de texto
+transcrever aula.mp3 --modelo large-v3-turbo   # erra menos e demora mais
+```
+
+Na primeira vez, o modelo é baixado da internet. Depois disso, o comando funciona sem conexão.
+
+| Opção | Valores | Padrão |
+| --- | --- | --- |
+| `--saida` | qualquer caminho de arquivo | o nome do áudio, com `.txt` |
+| `--modelo` | `tiny`, `base`, `small`, `medium`, `large-v3-turbo` | `small` |
+
+| Código de saída | Significado |
+| --- | --- |
+| `0` | Transcrição salva |
+| `1` | A transcrição falhou (modelo não carregado, texto não gravado etc.) |
+| `2` | Entrada inválida (arquivo ou opções) |
+| `130` | Cancelado com `Ctrl+C` |
+
 ## Escolha do modelo
 
 O Whisper tem modelos de vários tamanhos: os maiores erram menos e demoram mais. A comparação, feita com um áudio real em português, está em [docs/comparacao-modelos.md](docs/comparacao-modelos.md). Em resumo, em um notebook de 2017, sem usar a placa de vídeo:
