@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.venv/
+venv/
+
+# Segredos e autorizações do Google
+.env
+.env.*
+credentials*.json
+client_secret*.json
+token*.json
+
+# Áudios e vídeos: nunca vão para o repositório
+*.mp3
+*.wav
+*.m4a
+*.ogg
+*.opus
+*.flac
+*.aac
+*.wma
+*.mp4
+*.mkv
+*.webm
+*.mov
+
+# Modelos do Whisper
+models/
+modelos/
+*.bin
+*.pt
+
+# Saídas locais
+resultados/
+transcricoes/

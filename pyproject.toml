@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "transcritor-aulas"
+description = "Transcreve o áudio de uma aula no próprio PC, sem enviar o áudio para serviços pagos."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Lucas Marques de Assis" }]
+dynamic = ["version"]
+dependencies = [
+    "faster-whisper>=1.2",
+    # O faster-whisper 1.2.1 abre o áudio com um argumento que o PyAV 19 removeu
+    # (metadata_errors). Rever este limite quando o faster-whisper for atualizado.
+    "av<19",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[tool.setuptools.dynamic]
+version = { attr = "transcritor.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
