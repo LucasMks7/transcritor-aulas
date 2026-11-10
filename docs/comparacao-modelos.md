@@ -21,15 +21,15 @@ O áudio não está no repositório. Ele é o arquivo `oalienista_7_machadodeass
 
 ## Resultados
 
-| Modelo | Tamanho | Carga | Transcrição | Velocidade | Erro de palavras | Aula de 1 hora |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| `tiny` | 75 MB | 0,5 s | 16,2 s | 11,07x | 14,6% | cerca de 5 min |
-| `base` | 141 MB | 0,5 s | 21,1 s | 8,51x | 11,0% | cerca de 7 min |
-| `small` | 464 MB | 1,4 s | 50,7 s | 3,55x | 7,2% | cerca de 17 min |
-| `medium` | 1460 MB | 4,1 s | 138,8 s | 1,3x | 8,1% | cerca de 46 min |
-| `large-v3-turbo` | 1547 MB | 4,5 s | 230,1 s | 0,78x | 1,8% | cerca de 77 min |
+| Modelo | Tamanho | Carga | Transcrição | Velocidade | Erro de palavras |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `tiny` | 75 MB | 0,5 s | 16,2 s | 11,07x | 14,6% |
+| `base` | 141 MB | 0,5 s | 21,1 s | 8,51x | 11,0% |
+| `small` | 464 MB | 1,4 s | 50,7 s | 3,55x | 7,2% |
+| `medium` | 1460 MB | 4,1 s | 138,8 s | 1,3x | 8,1% |
+| `large-v3-turbo` | 1547 MB | 4,5 s | 230,1 s | 0,78x | 1,8% |
 
-A última coluna é uma projeção a partir da velocidade medida, não uma medição.
+**Estas velocidades valem para um áudio curto.** Em uma aula inteira, a transcrição fica mais lenta, provavelmente porque o processador esquenta: o `small` transcreveu um áudio de 2 horas em 67 minutos, a 1,77x o tempo real, metade da velocidade desta tabela. A medição está em [aulas-longas.md](aulas-longas.md). Para os outros modelos, a velocidade em uma aula longa não foi medida, e é de esperar uma queda parecida.
 
 ## O que os erros mostram
 
@@ -42,9 +42,9 @@ Comparando cada transcrição com a referência, palavra por palavra:
 
 ## Decisão
 
-- **Padrão: `small`.** No processador, é o maior modelo que ainda transcreve bem mais rápido que o tempo real, e o PC do amigo pode não ter placa de vídeo. Uma aula de uma hora fica pronta em cerca de 17 minutos, com 464 MB de download.
-- **Opção de qualidade: `large-v3-turbo`**, com `--modelo large-v3-turbo`, para quem aceita esperar mais que a duração da aula.
-- **`medium` não compensa:** custa quase três vezes o tempo do `small` e, nesta amostra, não foi melhor.
+- **Padrão: `small`.** No processador, é o maior modelo que ainda transcreve mais rápido que o tempo real mesmo em uma aula longa, e o PC do amigo pode não ter placa de vídeo. Uma aula de uma hora fica pronta em cerca de 34 minutos, pela medição do áudio de 2 horas, com 464 MB de download.
+- **Opção de qualidade: `large-v3-turbo`**, com `--modelo large-v3-turbo`, para quem aceita esperar bem mais que a duração da aula.
+- **`medium` não compensa:** custa quase três vezes o tempo do `small` e, nesta amostra, não foi melhor. Em uma aula longa, deve ficar mais lento que o tempo real.
 
 ## Limites desta comparação
 

@@ -16,6 +16,8 @@ dependencies = [
     # O faster-whisper 1.2.1 abre o áudio com um argumento que o PyAV 19 removeu
     # (metadata_errors). Rever este limite quando o faster-whisper for atualizado.
     "av<19",
+    # Já vem com o faster-whisper; declarado porque o projeto o usa diretamente.
+    "numpy",
 ]
 
 [project.optional-dependencies]

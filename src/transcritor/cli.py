@@ -7,13 +7,17 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from transcritor import __version__
+from transcritor.audio import AudioInvalido, conferir_audio
 from transcritor.transcricao import (
     MODELO_PADRAO,
     MODELOS,
     FalhaNaTranscricao,
+    Segmento,
     carregar_modelo,
     transcrever,
 )
+
+LARGURA_DA_LINHA = 70
 
 CODIGO_FALHA_NA_TRANSCRICAO = 1
 # Mesmo código que o argparse usa para erros de uso.
@@ -51,6 +55,41 @@ def usar_utf8_na_saida() -> None:
         fluxo.reconfigure(encoding="utf-8")
 
 
+def formatar_tempo(segundos: float) -> str:
+    """Escreve 3725 como "1:02:05" e 125 como "02:05"."""
+    minutos, segundos = divmod(int(segundos), 60)
+    horas, minutos = divmod(minutos, 60)
+    if horas:
+        return f"{horas}:{minutos:02}:{segundos:02}"
+    return f"{minutos:02}:{segundos:02}"
+
+
+def formatar_progresso(transcrito: float, total: float) -> str:
+    texto = f"Transcrevendo {formatar_tempo(transcrito)} de {formatar_tempo(total)}"
+    if total > 0:
+        # O fim do último trecho pode passar um pouco da duração informada.
+        texto += f" ({min(transcrito / total, 1):.0%})"
+    return texto
+
+
+def mostrar_progresso(transcrito: float, total: float) -> None:
+    """Reescreve a mesma linha do terminal; redirecionada, a saída fica sem progresso."""
+    # Vai para o stderr para não misturar com o resultado, escrito no stdout.
+    if sys.stderr.isatty():
+        texto = formatar_progresso(transcrito, total).ljust(LARGURA_DA_LINHA)
+        print(f"\r{texto}", end="", file=sys.stderr, flush=True)
+
+
+def limpar_progresso() -> None:
+    if sys.stderr.isatty():
+        print("\r" + " " * LARGURA_DA_LINHA + "\r", end="", file=sys.stderr, flush=True)
+
+
+def caminho_parcial(saida: Path) -> Path:
+    """Onde o texto é gravado enquanto a transcrição não termina."""
+    return saida.with_name(saida.name + ".parcial")
+
+
 def criar_parser() -> argparse.ArgumentParser:
     parser = ParserEmPortugues(
         prog="transcrever",
@@ -83,31 +122,69 @@ def main(argv: Sequence[str] | None = None) -> int:
     argumentos = criar_parser().parse_args(argv)
 
     audio = argumentos.audio
-    if not audio.is_file():
-        print(f"transcrever: erro: arquivo não encontrado: {audio}", file=sys.stderr)
-        return CODIGO_ENTRADA_INVALIDA
-    saida = argumentos.saida or audio.with_suffix(".txt")
-
     try:
-        print(f"Carregando o modelo {argumentos.modelo}...", file=sys.stderr)
-        modelo = carregar_modelo(argumentos.modelo)
-        print("Transcrevendo... Isso pode levar vários minutos.", file=sys.stderr)
-        transcricao = transcrever(audio, modelo)
-    except FalhaNaTranscricao as erro:
+        duracao = conferir_audio(audio)
+    except AudioInvalido as erro:
         print(f"transcrever: erro: {erro}", file=sys.stderr)
-        return CODIGO_FALHA_NA_TRANSCRICAO
-    except KeyboardInterrupt:
-        print("Transcrição cancelada.", file=sys.stderr)
-        return CODIGO_CANCELADO
+        return CODIGO_ENTRADA_INVALIDA
 
-    try:
-        saida.write_text(transcricao.texto + "\n", encoding="utf-8")
-    except OSError as erro:
+    saida = argumentos.saida or audio.with_suffix(".txt")
+    if saida.resolve() == audio.resolve():
         print(
-            f"transcrever: erro: não foi possível gravar {saida}: {erro.strerror}",
+            "transcrever: erro: a saída não pode ser o próprio áudio, "
+            "que seria apagado pelo texto.",
             file=sys.stderr,
         )
-        return CODIGO_FALHA_NA_TRANSCRICAO
+        return CODIGO_ENTRADA_INVALIDA
+    parcial = caminho_parcial(saida)
+    # Aberto antes de carregar o modelo: uma pasta sem permissão de gravação
+    # aparece agora, e não no fim de uma hora de transcrição.
+    try:
+        arquivo = parcial.open("w", encoding="utf-8")
+    except OSError as erro:
+        print(
+            f"transcrever: erro: não foi possível gravar em {saida}: {erro.strerror}",
+            file=sys.stderr,
+        )
+        return CODIGO_ENTRADA_INVALIDA
 
+    def guardar(segmento: Segmento, total: float) -> None:
+        # Cada trecho vai para o disco na hora. Se a transcrição de uma aula
+        # longa for interrompida, o que já foi feito não se perde.
+        arquivo.write(segmento.texto + "\n")
+        arquivo.flush()
+        mostrar_progresso(segmento.fim, total)
+
+    if duracao is not None:
+        print(f"Áudio de {formatar_tempo(duracao)}.", file=sys.stderr)
+
+    try:
+        with arquivo:
+            print(f"Carregando o modelo {argumentos.modelo}...", file=sys.stderr)
+            modelo = carregar_modelo(argumentos.modelo)
+            print("Transcrevendo...", file=sys.stderr)
+            transcrever(audio, modelo, guardar)
+    except FalhaNaTranscricao as erro:
+        limpar_progresso()
+        print(f"transcrever: erro: {erro}", file=sys.stderr)
+        avisar_do_parcial(parcial)
+        return CODIGO_FALHA_NA_TRANSCRICAO
+    except KeyboardInterrupt:
+        limpar_progresso()
+        print("Transcrição cancelada.", file=sys.stderr)
+        avisar_do_parcial(parcial)
+        return CODIGO_CANCELADO
+
+    limpar_progresso()
+    # Só agora o texto ganha o nome definitivo: um .txt nunca está pela metade.
+    parcial.replace(saida)
     print(f"Transcrição salva em: {saida}")
     return 0
+
+
+def avisar_do_parcial(parcial: Path) -> None:
+    """Diz onde ficou o texto já transcrito ou, se não houver nenhum, apaga o arquivo."""
+    if parcial.stat().st_size > 0:
+        print(f"O trecho já transcrito está em: {parcial}", file=sys.stderr)
+    else:
+        parcial.unlink()
