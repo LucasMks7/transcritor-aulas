@@ -8,8 +8,14 @@ from datetime import date
 from pathlib import Path
 
 from transcritor import __version__
+from transcritor.arquivos import (
+    SaidaInvalida,
+    TextoParcial,
+    conferir_saida,
+    gravar_pdf,
+)
 from transcritor.audio import AudioInvalido, conferir_audio
-from transcritor.pdf import Cabecalho, gerar_pdf
+from transcritor.pdf import Cabecalho
 from transcritor.transcricao import (
     DISPOSITIVO_PADRAO,
     DISPOSITIVOS,
@@ -95,11 +101,6 @@ def descrever_modelo(carregado: ModeloCarregado) -> str:
     return texto
 
 
-def caminho_parcial(saida: Path) -> Path:
-    """Onde o texto é gravado enquanto a transcrição não termina."""
-    return saida.with_name(saida.name + ".parcial")
-
-
 def criar_parser() -> argparse.ArgumentParser:
     parser = ParserEmPortugues(
         prog="transcrever",
@@ -147,25 +148,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         return CODIGO_ENTRADA_INVALIDA
 
     saida = argumentos.saida or audio.with_suffix(".txt")
-    if saida.suffix.lower() == ".pdf":
-        print(
-            "transcrever: erro: --saida é o arquivo de texto; o PDF é criado ao "
-            "lado dele, com o mesmo nome.",
-            file=sys.stderr,
-        )
-        return CODIGO_ENTRADA_INVALIDA
-    if audio.resolve() in (saida.resolve(), saida.with_suffix(".pdf").resolve()):
-        print(
-            "transcrever: erro: a saída não pode ser o próprio áudio, "
-            "que seria apagado pela transcrição.",
-            file=sys.stderr,
-        )
-        return CODIGO_ENTRADA_INVALIDA
-    parcial = caminho_parcial(saida)
-    # Aberto antes de carregar o modelo: uma pasta sem permissão de gravação
-    # aparece agora, e não no fim de uma hora de transcrição.
     try:
-        arquivo = parcial.open("w", encoding="utf-8")
+        conferir_saida(audio, saida)
+        texto = TextoParcial(saida)
+    except SaidaInvalida as erro:
+        print(f"transcrever: erro: {erro}", file=sys.stderr)
+        return CODIGO_ENTRADA_INVALIDA
     except OSError as erro:
         print(
             f"transcrever: erro: não foi possível gravar em {saida}: {erro.strerror}",
@@ -174,45 +162,37 @@ def main(argv: Sequence[str] | None = None) -> int:
         return CODIGO_ENTRADA_INVALIDA
 
     def guardar(segmento: Segmento, total: float) -> None:
-        # Cada trecho vai para o disco na hora. Se a transcrição de uma aula
-        # longa for interrompida, o que já foi feito não se perde.
-        arquivo.write(segmento.texto + "\n")
-        arquivo.flush()
+        texto.guardar(segmento)
         mostrar_progresso(segmento.fim, total)
 
     if duracao is not None:
         print(f"Áudio de {formatar_tempo(duracao)}.", file=sys.stderr)
 
     try:
-        with arquivo:
-            print("Carregando o modelo...", file=sys.stderr)
-            carregado = carregar_modelo(argumentos.modelo, argumentos.dispositivo)
-            print(descrever_modelo(carregado), file=sys.stderr)
-            transcricao = transcrever(audio, carregado.modelo, guardar)
+        print("Carregando o modelo...", file=sys.stderr)
+        carregado = carregar_modelo(argumentos.modelo, argumentos.dispositivo)
+        print(descrever_modelo(carregado), file=sys.stderr)
+        transcricao = transcrever(audio, carregado.modelo, guardar)
     except FalhaNaTranscricao as erro:
         limpar_progresso()
         print(f"transcrever: erro: {erro}", file=sys.stderr)
-        avisar_do_parcial(parcial)
+        avisar_do_parcial(texto)
         return CODIGO_FALHA_NA_TRANSCRICAO
     except KeyboardInterrupt:
         limpar_progresso()
         print("Transcrição cancelada.", file=sys.stderr)
-        avisar_do_parcial(parcial)
+        avisar_do_parcial(texto)
         return CODIGO_CANCELADO
 
     limpar_progresso()
-    # Só agora o texto ganha o nome definitivo: um .txt nunca está pela metade.
-    parcial.replace(saida)
+    texto.concluir()
     print(f"Transcrição salva em: {saida}")
 
     pdf = saida.with_suffix(".pdf")
     cabecalho = Cabecalho(audio.stem, transcricao.duracao, carregado.nome, date.today())
     try:
-        # Mesmo cuidado do texto: o PDF só ganha o nome final quando estiver completo.
-        gerar_pdf(transcricao.segmentos, cabecalho, caminho_parcial(pdf))
-        caminho_parcial(pdf).replace(pdf)
+        gravar_pdf(transcricao.segmentos, cabecalho, pdf)
     except OSError as erro:
-        caminho_parcial(pdf).unlink(missing_ok=True)
         # No Windows, o caso mais comum é o PDF anterior aberto no leitor.
         print(
             f"transcrever: erro: não foi possível gravar o PDF em {pdf}: {erro.strerror}. "
@@ -225,9 +205,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     return 0
 
 
-def avisar_do_parcial(parcial: Path) -> None:
-    """Diz onde ficou o texto já transcrito ou, se não houver nenhum, apaga o arquivo."""
-    if parcial.stat().st_size > 0:
+def avisar_do_parcial(texto: TextoParcial) -> None:
+    """Diz onde ficou o texto já transcrito; um parcial vazio é apagado."""
+    parcial = texto.abandonar()
+    if parcial is not None:
         print(f"O trecho já transcrito está em: {parcial}", file=sys.stderr)
-    else:
-        parcial.unlink()

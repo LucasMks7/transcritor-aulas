@@ -4,8 +4,9 @@ import sys
 
 import pytest
 
-from transcritor import __version__, cli
-from transcritor.cli import caminho_parcial, formatar_progresso, formatar_tempo, main
+from transcritor import __version__, arquivos, cli
+from transcritor.arquivos import caminho_parcial
+from transcritor.cli import formatar_progresso, formatar_tempo, main
 from transcritor.transcricao import FalhaNaTranscricao, ModeloCarregado
 
 
@@ -338,7 +339,7 @@ def test_pdf_que_nao_pode_ser_gravado_avisa_que_o_texto_ficou_salvo(
         destino.write_bytes(b"pela metade")
         raise PermissionError(13, "Permission denied")
 
-    monkeypatch.setattr(cli, "gerar_pdf", falhar)
+    monkeypatch.setattr(arquivos, "gerar_pdf", falhar)
 
     assert main([str(audio)]) == 1
 

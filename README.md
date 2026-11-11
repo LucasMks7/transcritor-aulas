@@ -32,6 +32,20 @@ Na primeira vez, o modelo é baixado da internet. Depois disso, o comando funcio
 | `2` | Entrada inválida (arquivo de áudio, arquivo de saída ou opções) |
 | `130` | Cancelado com `Ctrl+C` |
 
+### Janela
+
+Para quem prefere não usar o terminal:
+
+```text
+transcrever-janela
+```
+
+Basta escolher o áudio e clicar em **Transcrever**. A janela mostra quanto do áudio já foi transcrito e, no fim, o botão **Abrir PDF** abre o resultado. O texto e o PDF ficam na mesma pasta do áudio, com o mesmo nome. O modelo e o dispositivo são escolhidos sozinhos, como no modo `auto` do terminal.
+
+**Cancelar** para a transcrição no próximo trecho, e o que já estava pronto fica no arquivo `.parcial`. Enquanto o modelo é baixado, na primeira vez, o cancelamento só acontece quando o download termina.
+
+A janela e o terminal usam o mesmo código para conferir o áudio, transcrever e gravar os arquivos. A transcrição roda em outra thread, para a janela continuar respondendo, e manda o andamento para ela por uma fila, porque o Tkinter só aceita ser usado pela thread que o criou.
+
 ### PDF
 
 Junto com o texto, o comando gera um PDF pronto para ler e imprimir: o nome do áudio como título, a duração, a data e o modelo usado, e o texto dividido em parágrafos nas pausas da fala. Cada parágrafo começa com o tempo em que aparece na gravação, como `12:30`, para quem estuda voltar ao áudio naquele ponto.

@@ -66,13 +66,13 @@ jobs:
       # O modelo (75 MB) e o áudio (1,4 MB) ficam guardados entre execuções,
       # para não depender do Hugging Face e do archive.org a cada push.
       - name: Recuperar o modelo do cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/huggingface/hub
           key: whisper-tiny-v1
 
       - name: Recuperar a amostra do cache
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: amostras/alienista-cap11.mp3
           key: amostra-${{ hashFiles('scripts/baixar_amostra.py') }}

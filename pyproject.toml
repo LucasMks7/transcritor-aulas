@@ -35,6 +35,10 @@ gpu = [
 [project.scripts]
 transcrever = "transcritor.cli:main"
 
+# Como gui-script, o Windows abre a janela sem um terminal junto.
+[project.gui-scripts]
+transcrever-janela = "transcritor.janela:main"
+
 [tool.setuptools.dynamic]
 version = { attr = "transcritor.__version__" }
 
