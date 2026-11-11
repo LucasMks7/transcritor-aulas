@@ -1,5 +1,7 @@
 """Transcrição de áudio com o faster-whisper, feita inteira no próprio PC."""
 
+import os
+import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -7,10 +9,21 @@ from typing import Protocol
 
 import numpy as np
 
-# Escolhidos na comparação da sessão 11; veja docs/comparacao-modelos.md.
 MODELOS = ("tiny", "base", "small", "medium", "large-v3-turbo")
-MODELO_PADRAO = "small"
 IDIOMA = "pt"
+# Frase pontuada que o modelo recebe como se já tivesse sido dita antes do áudio.
+EXEMPLO_DE_ESTILO = "Bom dia, turma. Hoje, vamos continuar a aula de onde paramos."
+
+# "auto" usa a placa de vídeo quando ela funciona e o processador quando não.
+DISPOSITIVOS = ("auto", "cuda", "cpu")
+DISPOSITIVO_PADRAO = "auto"
+# Na placa de vídeo, o large-v3-turbo é quase tão rápido quanto o small e erra
+# bem menos. No processador, ele fica mais lento que o tempo real, e o small
+# continua o melhor equilíbrio. Veja docs/comparacao-modelos.md.
+MODELO_PADRAO = {"cuda": "large-v3-turbo", "cpu": "small"}
+# int8 foi o mais rápido nos dois. Na GTX 1050 Ti, o float32 do large-v3-turbo
+# não cabe bem nos 4 GB e fica cinco vezes mais lento.
+TIPOS_DE_CALCULO = {"cpu": "int8", "cuda": "int8"}
 
 # O Whisper trabalha com áudio a 16 kHz, em um canal só.
 TAXA_DE_AMOSTRAGEM = 16_000
@@ -52,27 +65,158 @@ class Transcricao:
         return "\n".join(segmento.texto for segmento in self.segmentos)
 
 
+def formatar_tempo(segundos: float) -> str:
+    """Escreve 3725 como "1:02:05" e 125 como "02:05"."""
+    minutos, segundos = divmod(int(segundos), 60)
+    horas, minutos = divmod(minutos, 60)
+    if horas:
+        return f"{horas}:{minutos:02}:{segundos:02}"
+    return f"{minutos:02}:{segundos:02}"
+
+
 class Modelo(Protocol):
     """O que este módulo usa do WhisperModel. Nos testes, um dublê ocupa o lugar."""
 
     def transcribe(self, audio: np.ndarray, **opcoes): ...
 
 
-def carregar_modelo(nome: str = MODELO_PADRAO) -> Modelo:
-    """Carrega o modelo, baixando-o na primeira vez, ou levanta FalhaNaTranscricao."""
+@dataclass(frozen=True)
+class ModeloCarregado:
+    modelo: Modelo
+    nome: str
+    # "cuda" (placa de vídeo da NVIDIA) ou "cpu" (processador).
+    dispositivo: str
+    # Por que a placa de vídeo não foi usada, quando o modo automático desistiu dela.
+    motivo_sem_gpu: str | None = None
+
+
+def _criar_whisper(nome: str, dispositivo: str) -> Modelo:
     # Importado aqui porque é pesado: o --help e os testes não precisam esperar por ele.
     from faster_whisper import WhisperModel
 
+    return WhisperModel(nome, device=dispositivo, compute_type=TIPOS_DE_CALCULO[dispositivo])
+
+
+def _contar_gpus() -> int:
+    """Quantas placas da NVIDIA o CTranslate2 enxerga; zero se não houver driver."""
+    preparar_bibliotecas_cuda()
+    import ctranslate2
+
+    return ctranslate2.get_cuda_device_count()
+
+
+def preparar_bibliotecas_cuda() -> None:
+    """Mostra ao Windows onde estão o cuBLAS e o cuDNN instalados pelo pip.
+
+    O CTranslate2 só procura essas bibliotecas na hora de calcular, e o Windows
+    não olha dentro do site-packages sozinho. Sem o extra [gpu], não há o que
+    preparar, e a transcrição segue no processador.
+    """
+    if sys.platform != "win32":
+        return
     try:
-        # int8 é o tipo de cálculo mais rápido no processador.
-        return WhisperModel(nome, device="cpu", compute_type="int8")
+        import nvidia
+    except ImportError:
+        return
+    for raiz in nvidia.__path__:
+        for biblioteca in ("cublas", "cudnn"):
+            pasta = str(Path(raiz) / biblioteca / "bin")
+            # Tem de ser o PATH: o CTranslate2 carrega as DLLs com a busca
+            # clássica do Windows, e os.add_dll_directory não funcionou nos testes.
+            if Path(pasta).is_dir() and pasta not in os.environ["PATH"].split(os.pathsep):
+                os.environ["PATH"] = pasta + os.pathsep + os.environ["PATH"]
+
+
+def testar_modelo(modelo: Modelo) -> None:
+    """Transcreve um segundo de silêncio para exercitar todas as bibliotecas.
+
+    Na GPU, o modelo carrega mesmo sem o cuBLAS e o cuDNN, e a falta deles só
+    aparece no primeiro cálculo. Descobrir isso agora permite voltar para o
+    processador antes de começar a aula, e não com ela pela metade.
+    """
+    silencio = np.zeros(TAXA_DE_AMOSTRAGEM, dtype=np.float32)
+    segmentos, _ = modelo.transcribe(silencio, language=IDIOMA)
+    # O gerador precisa ser percorrido para o cálculo acontecer.
+    list(segmentos)
+
+
+def carregar_modelo(
+    nome: str | None = None,
+    dispositivo: str = DISPOSITIVO_PADRAO,
+    criar: Callable[[str, str], Modelo] = _criar_whisper,
+    contar_gpus: Callable[[], int] = _contar_gpus,
+) -> ModeloCarregado:
+    """Carrega o modelo no dispositivo pedido, ou levanta FalhaNaTranscricao.
+
+    No modo "auto", usa a placa de vídeo se ela existir e passar no teste, e o
+    processador nos outros casos. Pedindo "cuda" explicitamente, uma falha na
+    placa vira erro, em vez de virar sem aviso uma transcrição dez vezes mais
+    lenta. Sem nome, o modelo é o padrão do dispositivo que for usado.
+
+    criar e contar_gpus existem para os testes trocarem a biblioteca por dublês.
+    """
+    motivo_sem_gpu = None
+    if dispositivo != "cpu":
+        nome_na_gpu = nome or MODELO_PADRAO["cuda"]
+        try:
+            modelo = _carregar_na_gpu(nome_na_gpu, criar, contar_gpus)
+            return ModeloCarregado(modelo, nome_na_gpu, "cuda")
+        except _SemGpu as erro:
+            if dispositivo == "cuda":
+                raise FalhaNaTranscricao(
+                    f"Não foi possível usar a placa de vídeo: {erro}."
+                ) from erro
+            motivo_sem_gpu = str(erro)
+
+    nome_na_cpu = nome or MODELO_PADRAO["cpu"]
+    modelo = _carregar(nome_na_cpu, "cpu", criar)
+    return ModeloCarregado(modelo, nome_na_cpu, "cpu", motivo_sem_gpu)
+
+
+class _SemGpu(Exception):
+    """A placa de vídeo não existe ou não conseguiu transcrever."""
+
+
+def _carregar_na_gpu(
+    nome: str, criar: Callable[[str, str], Modelo], contar_gpus: Callable[[], int]
+) -> Modelo:
+    try:
+        quantidade = contar_gpus()
     except Exception as erro:
-        # A biblioteca levanta tipos diferentes para falta de internet, disco
-        # cheio e arquivo corrompido; para quem usa, a orientação é a mesma.
-        raise FalhaNaTranscricao(
-            f"Não foi possível carregar o modelo {nome}. Na primeira vez, ele é "
-            f"baixado da internet e precisa de espaço em disco. Detalhe: {erro}"
-        ) from erro
+        raise _SemGpu(f"o CTranslate2 não conseguiu procurar a placa ({erro})") from erro
+    if quantidade == 0:
+        raise _SemGpu("nenhuma placa de vídeo da NVIDIA foi encontrada")
+
+    try:
+        modelo = criar(nome, "cuda")
+        testar_modelo(modelo)
+    # O CTranslate2 avisa driver antigo, DLL ausente e falta de memória da placa
+    # com RuntimeError. Falta de internet ou de disco chega como OSError e segue
+    # adiante: no processador, o mesmo download falharia de novo.
+    except RuntimeError as erro:
+        motivo = f"a placa foi encontrada, mas não conseguiu transcrever ({erro})"
+        if "cublas" in str(erro).lower() or "cudnn" in str(erro).lower():
+            motivo += '. Faltam as bibliotecas da NVIDIA: instale com pip install ".[gpu]"'
+        raise _SemGpu(motivo) from erro
+    except Exception as erro:
+        raise _erro_ao_carregar(nome, erro) from erro
+    return modelo
+
+
+def _carregar(nome: str, dispositivo: str, criar: Callable[[str, str], Modelo]) -> Modelo:
+    try:
+        return criar(nome, dispositivo)
+    except Exception as erro:
+        raise _erro_ao_carregar(nome, erro) from erro
+
+
+def _erro_ao_carregar(nome: str, erro: Exception) -> FalhaNaTranscricao:
+    # A biblioteca levanta tipos diferentes para falta de internet, disco cheio
+    # e arquivo corrompido; para quem usa, a orientação é a mesma.
+    return FalhaNaTranscricao(
+        f"Não foi possível carregar o modelo {nome}. Na primeira vez, ele é "
+        f"baixado da internet e precisa de espaço em disco. Detalhe: {erro}"
+    )
 
 
 def ler_amostras(audio: Path) -> np.ndarray:
@@ -149,6 +293,11 @@ def transcrever(
                 # conhecido do Whisper: em silêncio longo, ele repete ou inventa
                 # frases.
                 vad_filter=True,
+                # O Whisper imita o estilo do texto anterior. Sem um exemplo, o
+                # large-v3-turbo às vezes começa sem pontuação nem maiúsculas e
+                # segue assim até o fim, o que deixa o PDF ilegível. Vale para
+                # cada bloco, que começa sem texto anterior.
+                initial_prompt=EXEMPLO_DE_ESTILO,
             )
             # Os tempos vêm contados a partir do começo do bloco.
             deslocamento = inicio / TAXA_DE_AMOSTRAGEM

@@ -6,7 +6,7 @@ import pytest
 
 from transcritor import __version__, cli
 from transcritor.cli import caminho_parcial, formatar_progresso, formatar_tempo, main
-from transcritor.transcricao import MODELO_PADRAO, FalhaNaTranscricao
+from transcritor.transcricao import FalhaNaTranscricao, ModeloCarregado
 
 
 @pytest.fixture
@@ -17,12 +17,17 @@ def audio(criar_audio):
 
 @pytest.fixture
 def modelos_pedidos(monkeypatch, criar_modelo):
-    """Troca o carregamento do modelo por um dublê e devolve os nomes pedidos."""
+    """Troca o carregamento do modelo por um dublê e devolve os pedidos feitos.
+
+    Cada pedido é o par (modelo, dispositivo); o dublê responde como se a placa
+    de vídeo funcionasse.
+    """
     pedidos = []
 
-    def carregar(nome):
-        pedidos.append(nome)
-        return criar_modelo(" Bom dia, turma.", " Vamos começar.", duracao=1.0)
+    def carregar(nome, dispositivo):
+        pedidos.append((nome, dispositivo))
+        modelo = criar_modelo(" Bom dia, turma.", " Vamos começar.", duracao=1.0)
+        return ModeloCarregado(modelo, nome or "large-v3-turbo", "cuda")
 
     monkeypatch.setattr(cli, "carregar_modelo", carregar)
     return pedidos
@@ -36,14 +41,20 @@ def test_version_mostra_a_versao_do_pacote(capsys):
     assert capsys.readouterr().out.strip() == f"transcrever {__version__}"
 
 
-def test_transcreve_para_um_txt_ao_lado_do_audio(capsys, audio, modelos_pedidos):
+def test_transcreve_para_um_txt_e_um_pdf_ao_lado_do_audio(
+    capsys, audio, modelos_pedidos, ler_pdf
+):
     assert main([str(audio)]) == 0
 
     saida = audio.with_suffix(".txt")
     assert saida.read_text(encoding="utf-8") == "Bom dia, turma.\nVamos começar.\n"
-    assert modelos_pedidos == [MODELO_PADRAO]
+    # Sem escolha, o modelo fica a cargo do dispositivo que for usado.
+    assert modelos_pedidos == [(None, "auto")]
     capturado = capsys.readouterr()
-    assert capturado.out == f"Transcrição salva em: {saida}\n"
+    pdf = audio.with_suffix(".pdf")
+    assert capturado.out == f"Transcrição salva em: {saida}\nPDF salvo em: {pdf}\n"
+    assert "Bom dia, turma. Vamos começar." in ler_pdf(pdf)
+    assert not caminho_parcial(pdf).exists()
     assert "erro" not in capturado.err
     assert "Áudio de 00:01." in capturado.err
     # O arquivo parcial vira o definitivo; não sobra nada para trás.
@@ -62,7 +73,36 @@ def test_saida_escolhida_recebe_o_texto(audio, modelos_pedidos, tmp_path):
 def test_modelo_escolhido_e_o_carregado(audio, modelos_pedidos):
     assert main([str(audio), "--modelo", "tiny"]) == 0
 
-    assert modelos_pedidos == ["tiny"]
+    assert modelos_pedidos == [("tiny", "auto")]
+
+
+def test_dispositivo_escolhido_e_repassado(audio, modelos_pedidos):
+    assert main([str(audio), "--dispositivo", "cpu"]) == 0
+
+    assert modelos_pedidos == [(None, "cpu")]
+
+
+def test_mostra_o_modelo_e_o_dispositivo_usados(capsys, audio, modelos_pedidos):
+    assert main([str(audio)]) == 0
+
+    assert "modelo large-v3-turbo na placa de vídeo" in capsys.readouterr().err
+
+
+def test_descrever_modelo_explica_por_que_a_placa_ficou_de_fora():
+    carregado = ModeloCarregado("modelo", "small", "cpu", "nenhuma placa encontrada")
+
+    assert cli.descrever_modelo(carregado) == (
+        "Placa de vídeo não usada: nenhuma placa encontrada.\n"
+        "Transcrevendo com o modelo small no processador..."
+    )
+
+
+def test_descrever_modelo_no_processador_por_escolha_nao_fala_da_placa():
+    carregado = ModeloCarregado("modelo", "small", "cpu")
+
+    assert cli.descrever_modelo(carregado) == (
+        "Transcrevendo com o modelo small no processador..."
+    )
 
 
 def test_audio_inexistente_mostra_erro_sem_carregar_o_modelo(
@@ -86,7 +126,7 @@ def test_pasta_no_lugar_do_audio_e_recusada(capsys, modelos_pedidos, tmp_path):
 def test_falha_na_transcricao_mostra_erro_e_termina_com_codigo_1(
     capsys, audio, monkeypatch
 ):
-    def falhar(nome):
+    def falhar(nome, dispositivo):
         raise FalhaNaTranscricao("Não foi possível carregar o modelo small.")
 
     monkeypatch.setattr(cli, "carregar_modelo", falhar)
@@ -113,7 +153,7 @@ def test_saida_que_nao_pode_ser_gravada_mostra_erro(capsys, audio, modelos_pedid
 
 
 def test_ctrl_c_mostra_cancelamento_e_termina_com_codigo_130(capsys, audio, monkeypatch):
-    def interromper(nome):
+    def interromper(nome, dispositivo):
         raise KeyboardInterrupt
 
     monkeypatch.setattr(cli, "carregar_modelo", interromper)
@@ -190,7 +230,9 @@ def test_falha_no_meio_de_uma_aula_guarda_o_que_ja_foi_transcrito(
     modelo = criar_modelo(
         " Bom dia, turma.", " Vamos começar.", falha=RuntimeError("faltou memória")
     )
-    monkeypatch.setattr(cli, "carregar_modelo", lambda nome: modelo)
+    monkeypatch.setattr(
+        cli, "carregar_modelo", lambda nome, dispositivo: ModeloCarregado(modelo, "small", "cpu")
+    )
     saida = audio.with_suffix(".txt")
 
     assert main([str(audio)]) == 1
@@ -208,7 +250,9 @@ def test_ctrl_c_no_meio_de_uma_aula_guarda_o_que_ja_foi_transcrito(
     capsys, audio, monkeypatch, criar_modelo
 ):
     modelo = criar_modelo(" Bom dia, turma.", falha=KeyboardInterrupt())
-    monkeypatch.setattr(cli, "carregar_modelo", lambda nome: modelo)
+    monkeypatch.setattr(
+        cli, "carregar_modelo", lambda nome, dispositivo: ModeloCarregado(modelo, "small", "cpu")
+    )
 
     assert main([str(audio)]) == 130
 
@@ -261,3 +305,47 @@ def test_progresso_nao_aparece_na_saida_redirecionada(capsys, audio, modelos_ped
     assert main([str(audio)]) == 0
 
     assert "\rTranscrevendo" not in capsys.readouterr().err
+
+
+def test_saida_em_pdf_e_recusada(capsys, audio, modelos_pedidos, tmp_path):
+    assert main([str(audio), "--saida", str(tmp_path / "aula.pdf")]) == 2
+
+    assert "o PDF é criado ao lado" in capsys.readouterr().err
+    assert modelos_pedidos == []
+
+
+def test_pdf_fica_ao_lado_da_saida_escolhida(audio, modelos_pedidos, tmp_path):
+    assert main([str(audio), "--saida", str(tmp_path / "anotações.txt")]) == 0
+
+    assert (tmp_path / "anotações.pdf").is_file()
+
+
+def test_pdf_com_o_nome_do_audio_e_recusado(capsys, criar_audio, modelos_pedidos):
+    # Um vídeo chamado aula.pdf seria apagado pelo PDF da transcrição.
+    mp3 = criar_audio("aula.mp3")
+    video = mp3.rename(mp3.with_suffix(".pdf"))
+
+    assert main([str(video), "--saida", str(video.with_suffix(".txt"))]) == 2
+
+    assert "não pode ser o próprio áudio" in capsys.readouterr().err
+    assert video.read_bytes()[:3] != b"%PD"
+
+
+def test_pdf_que_nao_pode_ser_gravado_avisa_que_o_texto_ficou_salvo(
+    capsys, audio, modelos_pedidos, monkeypatch
+):
+    def falhar(segmentos, cabecalho, destino):
+        destino.write_bytes(b"pela metade")
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(cli, "gerar_pdf", falhar)
+
+    assert main([str(audio)]) == 1
+
+    erro = capsys.readouterr().err
+    assert "não foi possível gravar o PDF" in erro
+    assert "O texto já está salvo" in erro
+    assert audio.with_suffix(".txt").is_file()
+    # Nem o PDF nem o parcial ficam para trás.
+    assert not audio.with_suffix(".pdf").exists()
+    assert not caminho_parcial(audio.with_suffix(".pdf")).exists()

@@ -4,22 +4,30 @@ import argparse
 import re
 import sys
 from collections.abc import Sequence
+from datetime import date
 from pathlib import Path
 
 from transcritor import __version__
 from transcritor.audio import AudioInvalido, conferir_audio
+from transcritor.pdf import Cabecalho, gerar_pdf
 from transcritor.transcricao import (
+    DISPOSITIVO_PADRAO,
+    DISPOSITIVOS,
     MODELO_PADRAO,
     MODELOS,
     FalhaNaTranscricao,
+    ModeloCarregado,
     Segmento,
     carregar_modelo,
+    formatar_tempo,
     transcrever,
 )
 
 LARGURA_DA_LINHA = 70
 
 CODIGO_FALHA_NA_TRANSCRICAO = 1
+# O texto foi salvo, mas o PDF não: também é falha, para um script perceber.
+CODIGO_FALHA_NO_PDF = 1
 # Mesmo código que o argparse usa para erros de uso.
 CODIGO_ENTRADA_INVALIDA = 2
 # Convenção dos terminais para programa interrompido com Ctrl+C.
@@ -55,15 +63,6 @@ def usar_utf8_na_saida() -> None:
         fluxo.reconfigure(encoding="utf-8")
 
 
-def formatar_tempo(segundos: float) -> str:
-    """Escreve 3725 como "1:02:05" e 125 como "02:05"."""
-    minutos, segundos = divmod(int(segundos), 60)
-    horas, minutos = divmod(minutos, 60)
-    if horas:
-        return f"{horas}:{minutos:02}:{segundos:02}"
-    return f"{minutos:02}:{segundos:02}"
-
-
 def formatar_progresso(transcrito: float, total: float) -> str:
     texto = f"Transcrevendo {formatar_tempo(transcrito)} de {formatar_tempo(total)}"
     if total > 0:
@@ -85,6 +84,17 @@ def limpar_progresso() -> None:
         print("\r" + " " * LARGURA_DA_LINHA + "\r", end="", file=sys.stderr, flush=True)
 
 
+def descrever_modelo(carregado: ModeloCarregado) -> str:
+    """Diz qual modelo vai transcrever e onde, e por que a placa ficou de fora."""
+    if carregado.dispositivo == "cuda":
+        return f"Transcrevendo com o modelo {carregado.nome} na placa de vídeo..."
+    texto = f"Transcrevendo com o modelo {carregado.nome} no processador..."
+    if carregado.motivo_sem_gpu:
+        # Quem tem placa e vê a transcrição lenta precisa saber o porquê.
+        texto = f"Placa de vídeo não usada: {carregado.motivo_sem_gpu}.\n" + texto
+    return texto
+
+
 def caminho_parcial(saida: Path) -> Path:
     """Onde o texto é gravado enquanto a transcrição não termina."""
     return saida.with_name(saida.name + ".parcial")
@@ -100,14 +110,22 @@ def criar_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--saida",
         type=Path,
-        help="arquivo de texto a criar (padrão: o nome do áudio, com .txt)",
+        help="arquivo de texto a criar; o PDF fica ao lado, com o mesmo nome "
+        "(padrão: o nome do áudio, com .txt)",
     )
     parser.add_argument(
         "--modelo",
         choices=MODELOS,
-        default=MODELO_PADRAO,
         help="modelo do Whisper; os maiores erram menos e demoram mais "
-        "(padrão: %(default)s)",
+        f"(padrão: {MODELO_PADRAO['cuda']} na placa de vídeo, "
+        f"{MODELO_PADRAO['cpu']} no processador)",
+    )
+    parser.add_argument(
+        "--dispositivo",
+        choices=DISPOSITIVOS,
+        default=DISPOSITIVO_PADRAO,
+        help="onde transcrever: cuda é a placa de vídeo da NVIDIA, cpu é o "
+        "processador, e auto usa a placa quando ela funciona (padrão: %(default)s)",
     )
     parser.add_argument(
         "--version",
@@ -129,10 +147,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         return CODIGO_ENTRADA_INVALIDA
 
     saida = argumentos.saida or audio.with_suffix(".txt")
-    if saida.resolve() == audio.resolve():
+    if saida.suffix.lower() == ".pdf":
+        print(
+            "transcrever: erro: --saida é o arquivo de texto; o PDF é criado ao "
+            "lado dele, com o mesmo nome.",
+            file=sys.stderr,
+        )
+        return CODIGO_ENTRADA_INVALIDA
+    if audio.resolve() in (saida.resolve(), saida.with_suffix(".pdf").resolve()):
         print(
             "transcrever: erro: a saída não pode ser o próprio áudio, "
-            "que seria apagado pelo texto.",
+            "que seria apagado pela transcrição.",
             file=sys.stderr,
         )
         return CODIGO_ENTRADA_INVALIDA
@@ -160,10 +185,10 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     try:
         with arquivo:
-            print(f"Carregando o modelo {argumentos.modelo}...", file=sys.stderr)
-            modelo = carregar_modelo(argumentos.modelo)
-            print("Transcrevendo...", file=sys.stderr)
-            transcrever(audio, modelo, guardar)
+            print("Carregando o modelo...", file=sys.stderr)
+            carregado = carregar_modelo(argumentos.modelo, argumentos.dispositivo)
+            print(descrever_modelo(carregado), file=sys.stderr)
+            transcricao = transcrever(audio, carregado.modelo, guardar)
     except FalhaNaTranscricao as erro:
         limpar_progresso()
         print(f"transcrever: erro: {erro}", file=sys.stderr)
@@ -179,6 +204,24 @@ def main(argv: Sequence[str] | None = None) -> int:
     # Só agora o texto ganha o nome definitivo: um .txt nunca está pela metade.
     parcial.replace(saida)
     print(f"Transcrição salva em: {saida}")
+
+    pdf = saida.with_suffix(".pdf")
+    cabecalho = Cabecalho(audio.stem, transcricao.duracao, carregado.nome, date.today())
+    try:
+        # Mesmo cuidado do texto: o PDF só ganha o nome final quando estiver completo.
+        gerar_pdf(transcricao.segmentos, cabecalho, caminho_parcial(pdf))
+        caminho_parcial(pdf).replace(pdf)
+    except OSError as erro:
+        caminho_parcial(pdf).unlink(missing_ok=True)
+        # No Windows, o caso mais comum é o PDF anterior aberto no leitor.
+        print(
+            f"transcrever: erro: não foi possível gravar o PDF em {pdf}: {erro.strerror}. "
+            "Se ele estiver aberto em outro programa, feche-o e rode de novo. "
+            "O texto já está salvo.",
+            file=sys.stderr,
+        )
+        return CODIGO_FALHA_NO_PDF
+    print(f"PDF salvo em: {pdf}")
     return 0
 
 

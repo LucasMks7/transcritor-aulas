@@ -2,31 +2,51 @@
 
 Transcreve o áudio de uma aula no próprio PC, com o [faster-whisper](https://github.com/SYSTRAN/faster-whisper). O áudio não é enviado para nenhum serviço: depois do download inicial do modelo, a transcrição funciona sem internet.
 
-> **Status:** em desenvolvimento. O plano completo, com PDF e envio para o Google Drive, está em [PLANO.md](PLANO.md).
+> **Status:** em desenvolvimento. O plano completo, com envio para o Google Drive, está em [PLANO.md](PLANO.md).
 
 > **Antes de gravar:** é preciso ter permissão para gravar e para transcrever uma aula. Combine com quem dá a aula e respeite as regras da instituição.
 
 ## Uso
 
 ```text
-transcrever aula.mp3                           # cria aula.txt ao lado do áudio
-transcrever aula.mp3 --saida anotacoes.txt     # escolhe o arquivo de texto
+transcrever aula.mp3                           # cria aula.txt e aula.pdf ao lado do áudio
+transcrever aula.mp3 --saida anotacoes.txt     # cria anotacoes.txt e anotacoes.pdf
 transcrever aula.mp3 --modelo large-v3-turbo   # erra menos e demora mais
+transcrever aula.mp3 --dispositivo cpu         # não usa a placa de vídeo
 ```
 
 Na primeira vez, o modelo é baixado da internet. Depois disso, o comando funciona sem conexão.
 
 | Opção | Valores | Padrão |
 | --- | --- | --- |
-| `--saida` | qualquer caminho de arquivo | o nome do áudio, com `.txt` |
-| `--modelo` | `tiny`, `base`, `small`, `medium`, `large-v3-turbo` | `small` |
+| `--saida` | caminho do arquivo de texto; o PDF fica ao lado | o nome do áudio, com `.txt` |
+| `--modelo` | `tiny`, `base`, `small`, `medium`, `large-v3-turbo` | `large-v3-turbo` na placa de vídeo, `small` no processador |
+| `--dispositivo` | `auto`, `cuda` (placa de vídeo da NVIDIA), `cpu` | `auto` |
 
 | Código de saída | Significado |
 | --- | --- |
 | `0` | Transcrição salva |
-| `1` | A transcrição falhou (modelo não carregado, falta de memória etc.) |
+| `1` | A transcrição falhou (modelo não carregado, falta de memória etc.) ou o PDF não pôde ser gravado |
 | `2` | Entrada inválida (arquivo de áudio, arquivo de saída ou opções) |
 | `130` | Cancelado com `Ctrl+C` |
+
+### PDF
+
+Junto com o texto, o comando gera um PDF pronto para ler e imprimir: o nome do áudio como título, a duração, a data e o modelo usado, e o texto dividido em parágrafos nas pausas da fala. Cada parágrafo começa com o tempo em que aparece na gravação, como `12:30`, para quem estuda voltar ao áudio naquele ponto.
+
+O PDF usa as fontes que já vêm em todo leitor de PDF, então não depende de nenhum arquivo de fonte. Todas as letras do português aparecem normalmente; aspas curvas e travessões viram aspas retas e hífens.
+
+### Placa de vídeo
+
+Com uma placa de vídeo da NVIDIA, a transcrição fica muitas vezes mais rápida, e o modelo padrão passa a ser o `large-v3-turbo`, o que menos erra. No modo `auto`, o comando testa a placa antes de começar: se ela não existir ou não funcionar, a transcrição segue no processador, e o terminal diz por quê. Com `--dispositivo cuda`, uma placa que não funciona vira erro, em vez de uma transcrição lenta sem aviso.
+
+A placa precisa de duas bibliotecas da NVIDIA, o cuBLAS e o cuDNN, que ocupam cerca de 2 GB e por isso não vêm na instalação padrão:
+
+```bash
+pip install -e ".[gpu]"
+```
+
+Basta ter o driver da NVIDIA atualizado; não é preciso instalar o CUDA Toolkit. As medições estão em [docs/placa-de-video.md](docs/placa-de-video.md).
 
 ### Formatos aceitos
 
@@ -45,14 +65,14 @@ As medições estão em [docs/aulas-longas.md](docs/aulas-longas.md).
 
 ## Escolha do modelo
 
-O Whisper tem modelos de vários tamanhos: os maiores erram menos e demoram mais. A comparação, feita com um áudio real em português, está em [docs/comparacao-modelos.md](docs/comparacao-modelos.md). Em resumo, em um notebook de 2017, sem usar a placa de vídeo:
+O Whisper tem modelos de vários tamanhos: os maiores erram menos e demoram mais. A comparação, feita com um áudio real em português, está em [docs/comparacao-modelos.md](docs/comparacao-modelos.md), e a medição na placa de vídeo, em [docs/placa-de-video.md](docs/placa-de-video.md). Em resumo, em um notebook de 2017 com uma GTX 1050 Ti:
 
-| Modelo | Download | Aula de 1 hora | Erro de palavras |
-| --- | ---: | ---: | ---: |
-| `small` (padrão) | 464 MB | cerca de 34 min | 7,2% |
-| `large-v3-turbo` | 1547 MB | mais de 77 min | 1,8% |
+| Modelo | Download | Aula de 1 hora no processador | Aula de 1 hora na placa de vídeo | Erro de palavras |
+| --- | ---: | ---: | ---: | ---: |
+| `small` | 464 MB | cerca de 34 min (padrão) | cerca de 6 min | 7,2% |
+| `large-v3-turbo` | 1547 MB | mais de 77 min | cerca de 9 min (padrão) | 1,8% |
 
-O tempo do `small` vem da transcrição de um áudio de 2 horas, que levou 67 minutos. O do `large-v3-turbo` é uma projeção a partir de um áudio de 3 minutos; em uma aula inteira, a transcrição fica mais lenta e o tempo real deve ser maior.
+Os tempos do `small` no processador e do `large-v3-turbo` na placa vêm de um áudio de 2 horas, transcrito em 67 e em 17 minutos. Os outros dois são projeções a partir de um áudio de 3 minutos, e numa aula inteira devem ser maiores.
 
 ## Desenvolvimento
 

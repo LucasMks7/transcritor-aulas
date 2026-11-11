@@ -38,3 +38,7 @@ modelos/
 # Saídas locais
 resultados/
 transcricoes/
+
+# Transcrições geradas: podem conter o conteúdo de aulas reais
+*.pdf
+*.parcial

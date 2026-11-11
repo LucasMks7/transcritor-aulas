@@ -91,3 +91,14 @@ def criar_audio(tmp_path):
         return caminho
 
     return criar
+
+
+@pytest.fixture
+def ler_pdf():
+    """Extrai o texto de um PDF, para conferir o conteúdo e não só o arquivo."""
+    from pypdf import PdfReader
+
+    def ler(caminho):
+        return "\n".join(pagina.extract_text() for pagina in PdfReader(caminho).pages)
+
+    return ler

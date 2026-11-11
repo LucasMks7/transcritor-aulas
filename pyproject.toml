@@ -18,10 +18,19 @@ dependencies = [
     "av<19",
     # Já vem com o faster-whisper; declarado porque o projeto o usa diretamente.
     "numpy",
+    # Gera o PDF. Python puro, sem bibliotecas nativas para o instalador levar.
+    "fpdf2>=2.8",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "pypdf>=5"]
+# Bibliotecas do CUDA para transcrever na placa de vídeo da NVIDIA. Ocupam cerca
+# de 2 GB, por isso ficam de fora da instalação padrão. O CTranslate2 4.x usa o
+# CUDA 12 e o cuDNN 9.
+gpu = [
+    "nvidia-cublas-cu12; sys_platform == 'win32' or sys_platform == 'linux'",
+    "nvidia-cudnn-cu12>=9,<10; sys_platform == 'win32' or sys_platform == 'linux'",
+]
 
 [project.scripts]
 transcrever = "transcritor.cli:main"

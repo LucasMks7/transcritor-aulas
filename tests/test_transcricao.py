@@ -43,6 +43,17 @@ def test_transcrever_entrega_as_amostras_e_pede_portugues(audio, criar_modelo):
     assert opcoes["vad_filter"] is True
 
 
+def test_cada_bloco_recebe_um_exemplo_de_texto_pontuado(audio, criar_modelo):
+    modelo = criar_modelo("Bom dia.")
+
+    transcrever(audio, modelo, segundos_por_bloco=1.0)
+
+    # Sem o exemplo, o large-v3-turbo às vezes transcreve sem pontuação.
+    prompts = [opcoes["initial_prompt"] for _, opcoes in modelo.chamadas]
+    assert len(prompts) > 1
+    assert all("," in prompt and "." in prompt for prompt in prompts)
+
+
 def test_texto_traz_um_segmento_por_linha(audio, criar_modelo):
     transcricao = transcrever(audio, criar_modelo("Bom dia, turma.", "Vamos começar."))
 
@@ -163,8 +174,118 @@ def test_audio_vazio_nao_tem_blocos():
     assert dividir_em_blocos(np.zeros(0, dtype=np.float32)) == []
 
 
-def test_carregar_modelo_usa_o_processador_com_int8(monkeypatch):
+class PlacaQueFalha:
+    """Imita o modelo na GPU sem o cuBLAS: carrega, mas falha no primeiro cálculo."""
+
+    def transcribe(self, audio, **opcoes):
+        raise RuntimeError("Library cublas64_12.dll is not found or cannot be loaded")
+
+
+@pytest.fixture
+def carregados(criar_modelo):
+    """Um criar() de mentira que anota cada (modelo, dispositivo) carregado."""
+    pedidos = []
+
+    def criar(nome, dispositivo):
+        pedidos.append((nome, dispositivo))
+        return criar_modelo()
+
+    criar.pedidos = pedidos
+    return criar
+
+
+def test_com_placa_que_funciona_usa_a_placa_e_o_modelo_maior(carregados):
+    carregado = carregar_modelo(criar=carregados, contar_gpus=lambda: 1)
+
+    assert (carregado.nome, carregado.dispositivo) == ("large-v3-turbo", "cuda")
+    assert carregado.motivo_sem_gpu is None
+    assert carregados.pedidos == [("large-v3-turbo", "cuda")]
+
+
+def test_a_placa_e_testada_antes_de_ser_usada(carregados):
+    carregado = carregar_modelo(criar=carregados, contar_gpus=lambda: 1)
+
+    # O teste transcreve um segundo de silêncio, sem filtro, para forçar o cálculo.
+    audio, opcoes = carregado.modelo.chamadas[0]
+    assert len(audio) == 16_000
+    assert not audio.any()
+    assert opcoes == {"language": "pt"}
+
+
+def test_sem_placa_usa_o_processador_e_o_modelo_small(carregados):
+    carregado = carregar_modelo(criar=carregados, contar_gpus=lambda: 0)
+
+    assert (carregado.nome, carregado.dispositivo) == ("small", "cpu")
+    assert "nenhuma placa" in carregado.motivo_sem_gpu
+    # Sem placa, nada é carregado nela.
+    assert carregados.pedidos == [("small", "cpu")]
+
+
+def test_placa_sem_bibliotecas_volta_para_o_processador(criar_modelo):
+    pedidos = []
+
+    def criar(nome, dispositivo):
+        pedidos.append((nome, dispositivo))
+        return PlacaQueFalha() if dispositivo == "cuda" else criar_modelo()
+
+    carregado = carregar_modelo(criar=criar, contar_gpus=lambda: 1)
+
+    assert carregado.dispositivo == "cpu"
+    assert "cublas64_12.dll" in carregado.motivo_sem_gpu
+    # E diz como resolver.
+    assert 'pip install ".[gpu]"' in carregado.motivo_sem_gpu
+    assert pedidos == [("large-v3-turbo", "cuda"), ("small", "cpu")]
+
+
+def test_driver_que_nao_responde_volta_para_o_processador(carregados):
+    def contar_gpus():
+        raise RuntimeError("driver antigo")
+
+    carregado = carregar_modelo(criar=carregados, contar_gpus=contar_gpus)
+
+    assert carregado.dispositivo == "cpu"
+    assert "driver antigo" in carregado.motivo_sem_gpu
+
+
+def test_placa_pedida_que_nao_funciona_vira_erro_em_vez_de_ir_para_o_processador():
+    with pytest.raises(FalhaNaTranscricao, match="placa de vídeo.*cublas64_12"):
+        carregar_modelo(
+            dispositivo="cuda", criar=lambda nome, d: PlacaQueFalha(), contar_gpus=lambda: 1
+        )
+
+
+def test_processador_pedido_nem_procura_a_placa(carregados):
+    def contar_gpus():
+        raise AssertionError("não devia procurar a placa")
+
+    carregado = carregar_modelo(dispositivo="cpu", criar=carregados, contar_gpus=contar_gpus)
+
+    assert (carregado.nome, carregado.dispositivo) == ("small", "cpu")
+    assert carregado.motivo_sem_gpu is None
+
+
+def test_modelo_escolhido_vale_nos_dois_dispositivos(carregados):
+    assert carregar_modelo("tiny", criar=carregados, contar_gpus=lambda: 1).nome == "tiny"
+    assert carregar_modelo("tiny", criar=carregados, contar_gpus=lambda: 0).nome == "tiny"
+
+
+def test_falta_de_internet_na_placa_nao_tenta_o_processador():
+    pedidos = []
+
+    def criar(nome, dispositivo):
+        pedidos.append(dispositivo)
+        raise OSError("sem conexão")
+
+    # O download falharia igual no processador; melhor dizer logo o motivo real.
+    with pytest.raises(FalhaNaTranscricao, match="modelo large-v3-turbo.*sem conexão"):
+        carregar_modelo(criar=criar, contar_gpus=lambda: 1)
+    assert pedidos == ["cuda"]
+
+
+def test_whisper_e_criado_com_int8_no_dispositivo_pedido(monkeypatch):
     import faster_whisper
+
+    from transcritor.transcricao import _criar_whisper
 
     pedidos = []
 
@@ -174,17 +295,17 @@ def test_carregar_modelo_usa_o_processador_com_int8(monkeypatch):
 
     monkeypatch.setattr(faster_whisper, "WhisperModel", criar)
 
-    assert carregar_modelo("small") == "modelo carregado"
-    assert pedidos == [("small", {"device": "cpu", "compute_type": "int8"})]
+    assert _criar_whisper("small", "cpu") == "modelo carregado"
+    _criar_whisper("small", "cuda")
+    assert pedidos == [
+        ("small", {"device": "cpu", "compute_type": "int8"}),
+        ("small", {"device": "cuda", "compute_type": "int8"}),
+    ]
 
 
-def test_falha_ao_carregar_o_modelo_vira_mensagem_clara(monkeypatch):
-    import faster_whisper
-
-    def falhar(nome, **opcoes):
+def test_falha_ao_carregar_o_modelo_vira_mensagem_clara():
+    def falhar(nome, dispositivo):
         raise OSError("sem conexão")
 
-    monkeypatch.setattr(faster_whisper, "WhisperModel", falhar)
-
     with pytest.raises(FalhaNaTranscricao, match="modelo small.*sem conexão"):
-        carregar_modelo("small")
+        carregar_modelo("small", "cpu", criar=falhar)

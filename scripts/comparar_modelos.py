@@ -16,11 +16,9 @@ from pathlib import Path
 from faster_whisper import WhisperModel, download_model
 
 from transcritor.avaliacao import taxa_de_erro
+from transcritor.transcricao import TIPOS_DE_CALCULO, preparar_bibliotecas_cuda
 
 MODELOS_PADRAO = ("tiny", "base", "small", "medium", "large-v3-turbo")
-# Tipo de cálculo indicado para cada dispositivo: int8 é o mais rápido no
-# processador, e a GTX 1050 Ti não tem float16 eficiente.
-TIPOS_DE_CALCULO = {"cpu": "int8", "cuda": "int8"}
 
 
 def tamanho_em_mb(pasta: Path) -> float:
@@ -81,6 +79,14 @@ def main() -> None:
     parser.add_argument("--dispositivo", choices=TIPOS_DE_CALCULO, default="cpu")
     parser.add_argument("--saida", type=Path, help="pasta para o JSON e os textos")
     argumentos = parser.parse_args()
+
+    if argumentos.dispositivo == "cuda":
+        preparar_bibliotecas_cuda()
+        # A primeira execução na placa inicia o CUDA e o cuDNN e sairia mais
+        # lenta; um modelo pequeno paga esse custo fora das medidas.
+        aquecimento = WhisperModel("tiny", device="cuda", compute_type="int8")
+        list(aquecimento.transcribe(str(argumentos.audio), language="pt")[0])
+        del aquecimento
 
     referencia = argumentos.referencia.read_text(encoding="utf-8")
     resultados = []

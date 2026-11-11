@@ -6,7 +6,8 @@ A pessoa envia o áudio de uma aula, e a aplicação transcreve, gera um PDF e s
 
 - **Usuário:** um amigo do Lucas, rodando no próprio PC.
 - **Transcrição:** faster-whisper, uma implementação local e gratuita do Whisper. O áudio não sai do PC durante a transcrição.
-- **Modelo:** `small` por padrão e `large-v3-turbo` como opção de qualidade, escolhidos na sessão 11 com um áudio real. Os números estão em [docs/comparacao-modelos.md](docs/comparacao-modelos.md). Rever na sessão 14, com a placa de vídeo.
+- **Modelo:** depende do dispositivo. Com placa de vídeo da NVIDIA, `large-v3-turbo`, que nela transcreve duas horas em 17 minutos; no processador, `small`. Os números estão em [docs/comparacao-modelos.md](docs/comparacao-modelos.md) e [docs/placa-de-video.md](docs/placa-de-video.md).
+- **PDF:** fpdf2, em Python puro, com as fontes padrão do PDF. Parágrafos quebrados nas pausas da fala, cada um com o tempo em que aparece no áudio.
 - **Drive:** o usuário conecta a própria conta e escolhe a pasta do áudio e a pasta do PDF.
 
 ## Funcionar em outro PC
@@ -14,7 +15,7 @@ A pessoa envia o áudio de uma aula, e a aplicação transcreve, gera um PDF e s
 Funcionar no PC do Lucas não garante que funcione no do amigo. O projeto precisa cuidar destes pontos:
 
 - **Dependências:** o instalador precisa levar ou instalar o ffmpeg e tudo que o Python usa.
-- **Hardware:** sem placa de vídeo compatível, a transcrição roda no processador, mais devagar.
+- **Hardware:** sem placa de vídeo da NVIDIA, a transcrição roda no processador, umas quatro vezes mais devagar e com um modelo que erra mais. Com placa, as bibliotecas da NVIDIA somam 2 GB: o instalador só deve levá-las se o PC do amigo tiver uma.
 - **Modelo:** o download inicial exige internet e espaço em disco.
 - **Google:** o acesso ao Drive exige um projeto próprio no Google Cloud, e o modo de teste tem limitações de usuários e de duração da autorização. Confirmar as regras atuais na sessão 18.
 

@@ -42,6 +42,8 @@ Comparando cada transcrição com a referência, palavra por palavra:
 
 ## Decisão
 
+> **Atualização da sessão 14:** com placa de vídeo, o padrão passou a ser o `large-v3-turbo`, que nela é quase tão rápido quanto o `small`. Veja [placa-de-video.md](placa-de-video.md). A decisão abaixo continua valendo para quem transcreve no processador.
+
 - **Padrão: `small`.** No processador, é o maior modelo que ainda transcreve mais rápido que o tempo real mesmo em uma aula longa, e o PC do amigo pode não ter placa de vídeo. Uma aula de uma hora fica pronta em cerca de 34 minutos, pela medição do áudio de 2 horas, com 464 MB de download.
 - **Opção de qualidade: `large-v3-turbo`**, com `--modelo large-v3-turbo`, para quem aceita esperar bem mais que a duração da aula.
 - **`medium` não compensa:** custa quase três vezes o tempo do `small` e, nesta amostra, não foi melhor. Em uma aula longa, deve ficar mais lento que o tempo real.
@@ -51,4 +53,5 @@ Comparando cada transcrição com a referência, palavra por palavra:
 - É uma amostra só, de 3 minutos. Uma palavra errada vale 0,3 ponto percentual, então diferenças pequenas, como a entre `small` e `medium`, estão dentro do ruído.
 - O áudio é uma leitura limpa, perto do microfone. Uma aula gravada na sala, com eco, ruído e fala espontânea, terá mais erros em todos os modelos.
 - O vocabulário é literário, do século XIX, o que prejudica os modelos menores mais do que uma aula comum prejudicaria.
-- A placa de vídeo ficou de fora. A sessão 14 mede os mesmos modelos nela e pode mudar o padrão para quem tiver uma.
+- A placa de vídeo ficou de fora. A [medição nela](placa-de-video.md) mudou o padrão para quem tiver uma.
+- A métrica ignora pontuação e maiúsculas e, por isso, não mostrou que o `large-v3-turbo` às vezes transcreve sem nenhuma das duas. O defeito e a correção estão na [mesma página](placa-de-video.md#um-defeito-que-a-métrica-não-via).

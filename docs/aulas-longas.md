@@ -35,4 +35,4 @@ O pico de 1470 MB foi lido aos 22 minutos de áudio, depois de dois cortes de bl
 ## O que ainda pesa
 
 - O arquivo é decodificado inteiro para a memória antes da transcrição: são cerca de 220 MB por hora de áudio, com um pico passageiro de mais que o dobro disso. É o que sobra do pico de 1470 MB. Decodificar aos poucos resolveria, e fica para quando houver necessidade.
-- Uma aula de duas horas leva mais de uma hora no processador. A sessão 14 mede a placa de vídeo.
+- Uma aula de duas horas leva mais de uma hora no processador. Com a placa de vídeo, o mesmo áudio levou 17 minutos, com um modelo que erra menos; veja [placa-de-video.md](placa-de-video.md).
