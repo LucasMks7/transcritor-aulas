@@ -1,5 +1,7 @@
 # Transcritor de aulas
 
+[![Testes](https://github.com/LucasMks7/transcritor-aulas/actions/workflows/testes.yml/badge.svg)](https://github.com/LucasMks7/transcritor-aulas/actions/workflows/testes.yml)
+
 Transcreve o áudio de uma aula no próprio PC, com o [faster-whisper](https://github.com/SYSTRAN/faster-whisper). O áudio não é enviado para nenhum serviço: depois do download inicial do modelo, a transcrição funciona sem internet.
 
 > **Status:** em desenvolvimento. O plano completo, com envio para o Google Drive, está em [PLANO.md](PLANO.md).
@@ -88,7 +90,16 @@ pytest
 
 Se o projeto estiver em uma pasta sincronizada, como o OneDrive, crie o ambiente virtual fora dela. Os modelos ficam no cache do Hugging Face, na pasta do usuário, também fora do projeto.
 
-Os testes não usam gravações de aulas. A amostra da comparação é um capítulo de *O Alienista* lido para o LibriVox, em domínio público; o áudio não fica no repositório.
+Os testes comuns trocam o Whisper por um dublê e geram os próprios áudios, então rodam em segundos e sem internet.
+
+O teste de ponta a ponta roda o comando de verdade, com o modelo `tiny`, sobre o capítulo XI de *O Alienista* lido para o LibriVox, em domínio público. O áudio não fica no repositório: o script baixa e confere o arquivo. O teste exige que a transcrição erre menos de 25% das palavras do livro (o `tiny` erra cerca de 15%).
+
+```bash
+python scripts/baixar_amostra.py
+pytest -m ponta_a_ponta
+```
+
+O GitHub Actions roda os testes comuns no Windows e no Ubuntu, com Python 3.10 e 3.14, e o de ponta a ponta no Windows, a cada push. Os testes nunca usam gravações de aulas.
 
 ## Licença
 

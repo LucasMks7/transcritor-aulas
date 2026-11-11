@@ -1,0 +1,87 @@
+name: Testes
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# O workflow só lê o código; não precisa de permissão de escrita.
+permissions:
+  contents: read
+
+# Um push novo na mesma branch cancela a execução anterior, que ficou obsoleta.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  pytest:
+    name: Python ${{ matrix.python }} · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      # Mostra todas as combinações que falharam, não apenas a primeira.
+      fail-fast: false
+      matrix:
+        # O amigo usa Windows; o Ubuntu pega o que depender do sistema.
+        os: [windows-latest, ubuntu-latest]
+        # A versão mínima declarada no pyproject.toml e a mais recente.
+        python: ["3.10", "3.14"]
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar o projeto
+        run: python -m pip install -e ".[dev]"
+
+      # Usam um dublê no lugar do Whisper e geram os próprios áudios: não
+      # baixam nada da internet.
+      - name: Rodar os testes
+        run: python -m pytest -v
+
+  ponta-a-ponta:
+    name: Ponta a ponta · modelo tiny
+    runs-on: windows-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar o projeto
+        run: python -m pip install -e ".[dev]"
+
+      # O modelo (75 MB) e o áudio (1,4 MB) ficam guardados entre execuções,
+      # para não depender do Hugging Face e do archive.org a cada push.
+      - name: Recuperar o modelo do cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface/hub
+          key: whisper-tiny-v1
+
+      - name: Recuperar a amostra do cache
+        uses: actions/cache@v4
+        with:
+          path: amostras/alienista-cap11.mp3
+          key: amostra-${{ hashFiles('scripts/baixar_amostra.py') }}
+
+      - name: Baixar a amostra
+        run: python scripts/baixar_amostra.py
+
+      - name: Transcrever a amostra com o modelo de verdade
+        env:
+          # Sem a amostra, o teste falha em vez de ser pulado sem ninguém notar.
+          EXIGIR_AMOSTRA: "1"
+        run: python -m pytest -m ponta_a_ponta -v

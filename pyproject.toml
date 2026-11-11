@@ -43,3 +43,6 @@ where = ["src"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# O teste com o modelo de verdade só roda quando pedido: pytest -m ponta_a_ponta.
+addopts = "-m 'not ponta_a_ponta'"
+markers = ["ponta_a_ponta: usa o modelo tiny e o áudio de exemplo de verdade"]
