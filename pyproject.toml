@@ -20,6 +20,9 @@ dependencies = [
     "numpy",
     # Gera o PDF. Python puro, sem bibliotecas nativas para o instalador levar.
     "fpdf2>=2.8",
+    # Autorização e envio para o Google Drive: as bibliotecas oficiais do Google.
+    "google-auth-oauthlib>=1.2",
+    "google-api-python-client>=2.100",
 ]
 
 [project.optional-dependencies]
@@ -34,6 +37,7 @@ gpu = [
 
 [project.scripts]
 transcrever = "transcritor.cli:main"
+transcritor-drive = "transcritor.drive:main"
 
 # Como gui-script, o Windows abre a janela sem um terminal junto.
 [project.gui-scripts]
