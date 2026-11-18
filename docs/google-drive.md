@@ -27,6 +27,19 @@ transcritor-drive desconectar   # esquece a autorização neste PC
 
 Como o app não é verificado, o Google mostra o aviso "O Google não verificou este app". Para seguir, clique em **Avançado** e depois em **Acessar transcritor-aulas**. A tela seguinte diz exatamente o que o app pode fazer: ver, editar, criar e excluir **apenas os arquivos do Drive que você usar com este app**.
 
+## Pastas de destino
+
+```text
+transcritor-drive pastas                          # lista as pastas que o transcritor criou
+transcritor-drive pasta-audio                     # escolhe pelo número ou cria uma pasta nova
+transcritor-drive pasta-audio --nome "Cálculo II" # usa essa pasta, criando-a se preciso
+```
+
+- Por causa do `drive.file`, a lista mostra só as pastas criadas pelo transcritor, nunca o resto do Drive.
+- O Drive aceita duas pastas com o mesmo nome. Por isso o transcritor procura a pasta pelo nome antes de criar e reaproveita a que já existe.
+- Uma pasta que foi para a lixeira some da lista.
+- Enquanto as preferências não forem salvas (sessão 22), o comando só mostra a pasta escolhida e o ID dela.
+
 Para revogar o acesso também no Google, use [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
 
 ## Quando a autorização deixa de valer

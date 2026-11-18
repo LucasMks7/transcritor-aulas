@@ -152,15 +152,19 @@ def desconectar(token: Path | None = None) -> bool:
     return False
 
 
-def conta_conectada(credenciais) -> str:
-    """O e-mail da conta autorizada, para a pessoa confirmar que é a certa."""
+def servico_do_drive(credenciais):
+    """O cliente da API do Drive v3 que as outras funções recebem."""
     from googleapiclient.discovery import build
 
+    return build("drive", "v3", credentials=credenciais, cache_discovery=False)
+
+
+def conta_conectada(credenciais) -> str:
+    """O e-mail da conta autorizada, para a pessoa confirmar que é a certa."""
     from googleapiclient.errors import HttpError
 
     try:
-        servico = build("drive", "v3", credentials=credenciais, cache_discovery=False)
-        sobre = servico.about().get(fields="user(emailAddress)").execute()
+        sobre = servico_do_drive(credenciais).about().get(fields="user(emailAddress)").execute()
     # HttpError: a API do Drive desativada no projeto, por exemplo. OSError: sem internet.
     except (HttpError, OSError) as erro:
         raise FalhaNaAutorizacao(f"o Google Drive não respondeu: {erro}") from erro
@@ -174,10 +178,18 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "acao",
-        choices=("conectar", "desconectar"),
-        help="conectar pede a autorização no navegador; desconectar a esquece neste PC",
+        choices=("conectar", "desconectar", "pastas", "pasta-audio"),
+        help="conectar pede a autorização no navegador; desconectar a esquece neste PC; "
+        "pastas lista as pastas do transcritor; pasta-audio escolhe ou cria a pasta do áudio",
+    )
+    parser.add_argument(
+        "--nome",
+        help="com pasta-audio: usa a pasta com esse nome, criando-a se preciso, sem perguntar",
     )
     argumentos = parser.parse_args(argv)
+
+    if argumentos.acao in ("pastas", "pasta-audio"):
+        return _comando_de_pastas(argumentos)
 
     if argumentos.acao == "desconectar":
         if desconectar():
@@ -194,6 +206,32 @@ def main(argv=None) -> int:
         print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
         return 1
     print(f"Conectado ao Google Drive de {email}.")
+    return 0
+
+
+def _comando_de_pastas(argumentos) -> int:
+    from transcritor import pastas
+
+    try:
+        servico = servico_do_drive(conectar())
+        if argumentos.acao == "pastas":
+            encontradas = pastas.listar_pastas(servico)
+            if not encontradas:
+                print("O transcritor ainda não criou nenhuma pasta no seu Drive.")
+            for pasta in encontradas:
+                print(pasta.nome)
+            return 0
+        if argumentos.nome:
+            escolhida = pastas.obter_ou_criar(servico, argumentos.nome)
+        else:
+            escolhida = pastas.escolher_pasta(servico, "o áudio", pastas.NOME_PADRAO_AUDIO)
+    except (FalhaNaAutorizacao, pastas.FalhaNoDrive, ValueError) as erro:
+        print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
+        return 1
+    except (EOFError, KeyboardInterrupt):
+        print("\nNenhuma pasta escolhida.", file=sys.stderr)
+        return 1
+    print(f"Pasta do áudio: {escolhida.nome} (id {escolhida.id})")
     return 0
 
 
