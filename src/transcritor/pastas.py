@@ -15,12 +15,25 @@ from collections.abc import Callable
 from typing import NamedTuple
 
 TIPO_PASTA = "application/vnd.google-apps.folder"
-NOME_PADRAO_AUDIO = "Transcritor - Áudios"
 
 
 class Pasta(NamedTuple):
     id: str
     nome: str
+
+
+class Destino(NamedTuple):
+    """Para onde vai cada arquivo gerado. Um destino novo é só uma linha em DESTINOS."""
+
+    rotulo: str  # como aparece nas mensagens: "Pasta do áudio"
+    finalidade: str  # como aparece na pergunta: "para o áudio"
+    nome_padrao: str
+
+
+DESTINOS = {
+    "audio": Destino("Pasta do áudio", "o áudio", "Transcritor - Áudios"),
+    "pdf": Destino("Pasta do PDF", "o PDF", "Transcritor - PDFs"),
+}
 
 
 class FalhaNoDrive(RuntimeError):
@@ -97,14 +110,18 @@ def escolher_pasta(
     servico,
     finalidade: str,
     nome_padrao: str,
-    perguntar: Callable[[str], str] = input,
-    mostrar: Callable[[str], None] = print,
+    perguntar: Callable[[str], str] | None = None,
+    mostrar: Callable[[str], None] | None = None,
 ) -> Pasta:
     """Mostra as pastas numeradas e devolve a escolhida.
 
     A resposta pode ser o número de uma pasta, o nome de uma pasta nova ou
     vazia, que usa o nome padrão. Um nome que já existe reaproveita a pasta.
     """
+    # input e print são buscados agora, não na definição da função: um valor
+    # padrão "= input" guardaria a função do momento da importação.
+    perguntar = perguntar or input
+    mostrar = mostrar or print
     pastas = listar_pastas(servico)
     if pastas:
         mostrar(f"Pastas do transcritor no seu Drive para {finalidade}:")

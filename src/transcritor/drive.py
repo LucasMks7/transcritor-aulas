@@ -178,17 +178,19 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "acao",
-        choices=("conectar", "desconectar", "pastas", "pasta-audio"),
+        choices=("conectar", "desconectar", "pastas", "pasta-audio", "pasta-pdf"),
         help="conectar pede a autorização no navegador; desconectar a esquece neste PC; "
-        "pastas lista as pastas do transcritor; pasta-audio escolhe ou cria a pasta do áudio",
+        "pastas lista as pastas do transcritor; pasta-audio e pasta-pdf escolhem ou criam "
+        "a pasta de destino de cada arquivo",
     )
     parser.add_argument(
         "--nome",
-        help="com pasta-audio: usa a pasta com esse nome, criando-a se preciso, sem perguntar",
+        help="com pasta-audio ou pasta-pdf: usa a pasta com esse nome, criando-a se preciso, "
+        "sem perguntar",
     )
     argumentos = parser.parse_args(argv)
 
-    if argumentos.acao in ("pastas", "pasta-audio"):
+    if argumentos.acao in ("pastas", "pasta-audio", "pasta-pdf"):
         return _comando_de_pastas(argumentos)
 
     if argumentos.acao == "desconectar":
@@ -221,17 +223,19 @@ def _comando_de_pastas(argumentos) -> int:
             for pasta in encontradas:
                 print(pasta.nome)
             return 0
+        # "pasta-audio" -> DESTINOS["audio"], "pasta-pdf" -> DESTINOS["pdf"]
+        destino = pastas.DESTINOS[argumentos.acao.removeprefix("pasta-")]
         if argumentos.nome:
             escolhida = pastas.obter_ou_criar(servico, argumentos.nome)
         else:
-            escolhida = pastas.escolher_pasta(servico, "o áudio", pastas.NOME_PADRAO_AUDIO)
+            escolhida = pastas.escolher_pasta(servico, destino.finalidade, destino.nome_padrao)
     except (FalhaNaAutorizacao, pastas.FalhaNoDrive, ValueError) as erro:
         print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
         return 1
     except (EOFError, KeyboardInterrupt):
         print("\nNenhuma pasta escolhida.", file=sys.stderr)
         return 1
-    print(f"Pasta do áudio: {escolhida.nome} (id {escolhida.id})")
+    print(f"{destino.rotulo}: {escolhida.nome} (id {escolhida.id})")
     return 0
 
 

@@ -200,3 +200,40 @@ def test_comando_pasta_audio_com_drive_fora_do_ar(monkeypatch, capsys):
 
     assert drive.main(["pasta-audio", "--nome", "Áudios"]) == 1
     assert "erro: o Google Drive não respondeu" in capsys.readouterr().err
+
+
+def test_audio_e_pdf_tem_nomes_padrao_diferentes():
+    # Pastas padrão separadas: o PDF não se perde no meio de horas de áudio.
+    assert pastas.DESTINOS["audio"].nome_padrao != pastas.DESTINOS["pdf"].nome_padrao
+
+
+def test_comando_pasta_pdf_com_nome(monkeypatch, capsys):
+    servico = DriveFalso()
+    monkeypatch.setattr(drive, "conectar", lambda: object())
+    monkeypatch.setattr(drive, "servico_do_drive", lambda _c: servico)
+
+    assert drive.main(["pasta-pdf", "--nome", "PDFs de Física"]) == 0
+    assert "Pasta do PDF: PDFs de Física (id novo-0)" in capsys.readouterr().out
+
+
+def test_comando_pasta_pdf_sem_resposta_cria_a_pasta_padrao_do_pdf(monkeypatch, capsys):
+    servico = DriveFalso(["Transcritor - Áudios"])
+    monkeypatch.setattr(drive, "conectar", lambda: object())
+    monkeypatch.setattr(drive, "servico_do_drive", lambda _c: servico)
+    monkeypatch.setattr("builtins.input", lambda _p: "")
+
+    assert drive.main(["pasta-pdf"]) == 0
+    saida = capsys.readouterr().out
+    assert "para o PDF" in saida
+    assert "Pasta do PDF: Transcritor - PDFs" in saida
+
+
+def test_pdf_pode_ir_para_a_mesma_pasta_do_audio(monkeypatch, capsys):
+    servico = DriveFalso(["Transcritor - Áudios"])
+    monkeypatch.setattr(drive, "conectar", lambda: object())
+    monkeypatch.setattr(drive, "servico_do_drive", lambda _c: servico)
+    monkeypatch.setattr("builtins.input", lambda _p: "1")
+
+    assert drive.main(["pasta-pdf"]) == 0
+    assert "Pasta do PDF: Transcritor - Áudios (id id-0)" in capsys.readouterr().out
+    assert servico.criadas == []

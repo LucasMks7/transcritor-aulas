@@ -33,11 +33,13 @@ Como o app não é verificado, o Google mostra o aviso "O Google não verificou 
 transcritor-drive pastas                          # lista as pastas que o transcritor criou
 transcritor-drive pasta-audio                     # escolhe pelo número ou cria uma pasta nova
 transcritor-drive pasta-audio --nome "Cálculo II" # usa essa pasta, criando-a se preciso
+transcritor-drive pasta-pdf                       # o mesmo para a pasta do PDF
 ```
 
 - Por causa do `drive.file`, a lista mostra só as pastas criadas pelo transcritor, nunca o resto do Drive.
 - O Drive aceita duas pastas com o mesmo nome. Por isso o transcritor procura a pasta pelo nome antes de criar e reaproveita a que já existe.
 - Uma pasta que foi para a lixeira some da lista.
+- Os nomes padrão são `Transcritor - Áudios` e `Transcritor - PDFs`. O PDF também pode ir para a mesma pasta do áudio: basta escolher o número dela.
 - Enquanto as preferências não forem salvas (sessão 22), o comando só mostra a pasta escolhida e o ID dela.
 
 Para revogar o acesso também no Google, use [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
