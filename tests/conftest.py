@@ -39,6 +39,12 @@ class ModeloFalso:
             raise self.falha
 
 
+@pytest.fixture(autouse=True)
+def configuracao_isolada(monkeypatch, tmp_path_factory):
+    """Nenhum teste lê nem grava as preferências e a autorização de quem o roda."""
+    monkeypatch.setenv("APPDATA", str(tmp_path_factory.mktemp("configuracao")))
+
+
 @pytest.fixture
 def criar_modelo():
     def criar(*textos, duracao=10.0, falha=None):

@@ -6,16 +6,18 @@ import threading
 import tkinter as tk
 import webbrowser
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date
 from pathlib import Path
 from tkinter import filedialog, ttk
 
+from transcritor import drive, preferencias
 from transcritor.arquivos import SaidaInvalida, TextoParcial, conferir_saida, gravar_pdf
 from transcritor.audio import AudioInvalido, conferir_audio
 
 # Os textos de andamento são os mesmos do terminal.
 from transcritor.cli import descrever_modelo, formatar_progresso
+from transcritor.entrega import entregar
 from transcritor.pdf import Cabecalho
 from transcritor.transcricao import (
     FalhaNaTranscricao,
@@ -36,7 +38,13 @@ TEXTO_CARREGANDO = (
 TEXTO_GERANDO_PDF = "Gerando o PDF..."
 TEXTO_CANCELANDO = "Cancelando..."
 TEXTO_CANCELADO = "Transcrição cancelada."
+TEXTO_CONECTANDO = (
+    "Conectando ao Google Drive... Se o navegador abrir, entre na sua conta e permita o acesso."
+)
 TEXTO_PRIVACIDADE = "O áudio é transcrito neste computador e não é enviado para a internet."
+TEXTO_PRIVACIDADE_COM_DRIVE = (
+    "O áudio é transcrito neste computador. Depois, o áudio e o PDF vão só para o seu Drive."
+)
 
 # Só filtra a caixa de escolha. O programa confere o conteúdo, não a extensão.
 TIPOS_DE_ARQUIVO = [
@@ -51,6 +59,8 @@ class Pedido:
 
     audio: Path
     duracao: float | None
+    # Os nomes das pastas do Drive, ou None para não enviar nada.
+    pastas: dict[str, str] | None = None
 
     @property
     def saida(self) -> Path:
@@ -79,7 +89,7 @@ class _Cancelada(Exception):
     """Levantada dentro da transcrição para interrompê-la no próximo trecho."""
 
 
-def preparar_pedido(campo: str) -> Pedido:
+def preparar_pedido(campo: str, pastas: dict[str, str] | None = None) -> Pedido:
     """Confere o áudio do campo ou levanta AudioInvalido ou SaidaInvalida."""
     # O "Copiar como caminho" do Windows põe o caminho entre aspas.
     texto = campo.strip().strip('"').strip()
@@ -88,7 +98,12 @@ def preparar_pedido(campo: str) -> Pedido:
     audio = Path(texto)
     duracao = conferir_audio(audio)
     conferir_saida(audio, audio.with_suffix(".txt"))
-    return Pedido(audio, duracao)
+    return Pedido(audio, duracao, pastas)
+
+
+def conectar_ao_drive():
+    """Usa a autorização salva ou abre o navegador. Levanta FalhaNaAutorizacao."""
+    return drive.servico_do_drive(drive.conectar())
 
 
 def executar(
@@ -96,7 +111,9 @@ def executar(
     avisar: Callable[[Andamento | Resultado], None],
     cancelamento: threading.Event,
 ) -> None:
-    """Transcreve e gera o PDF, avisando cada etapa. Roda fora da thread da janela.
+    """Transcreve, gera o PDF e o envia ao Drive, se pedido, avisando cada etapa.
+
+    Roda fora da thread da janela.
 
     Sempre termina com exatamente um Resultado, inclusive em erros imprevistos:
     sem isso, a janela ficaria esperando para sempre.
@@ -117,7 +134,19 @@ def executar(
         percentual = min(segmento.fim / total, 1) * 100 if total > 0 else None
         avisar(Andamento(formatar_progresso(segmento.fim, total), percentual))
 
+    servico = None
+    falha_no_drive = None
     try:
+        if pedido.pastas is not None:
+            # Antes de transcrever, com a pessoa ainda na frente do PC. Sem acesso
+            # ao Drive, a transcrição segue: o PDF vale por si.
+            avisar(Andamento(TEXTO_CONECTANDO))
+            try:
+                servico = conectar_ao_drive()
+            except drive.FalhaNaAutorizacao as erro:
+                falha_no_drive = str(erro)
+            if cancelamento.is_set():
+                raise _Cancelada
         avisar(Andamento(TEXTO_CARREGANDO))
         carregado = carregar_modelo()
         if cancelamento.is_set():
@@ -144,7 +173,51 @@ def executar(
                                 f"{erro.strerror}. Se ele estiver aberto em outro "
                                 "programa, feche-o e transcreva de novo."))
         return
-    avisar(Resultado(True, f"Pronto! PDF salvo em: {pdf}", pdf))
+    pronto = f"Pronto! PDF salvo em: {pdf}"
+    if servico is not None:
+        falha_no_drive = enviar_ao_drive(servico, pedido, pdf, avisar, cancelamento)
+    if falha_no_drive is not None:
+        avisar(Resultado(False, f"{pronto}. Envio ao Drive incompleto: {falha_no_drive}", pdf))
+    elif servico is not None:
+        avisar(Resultado(True, f"{pronto}. O áudio e o PDF estão no seu Drive.", pdf))
+    else:
+        avisar(Resultado(True, pronto, pdf))
+
+
+def enviar_ao_drive(
+    servico,
+    pedido: Pedido,
+    pdf: Path,
+    avisar: Callable[[Andamento | Resultado], None],
+    cancelamento: threading.Event,
+) -> str | None:
+    """Envia o PDF e o áudio. Devolve o que deu errado, ou None."""
+
+    def progredir(arquivo: Path, enviado: int, total: int) -> None:
+        if cancelamento.is_set():
+            raise _Cancelada
+        percentual = enviado / total * 100
+        avisar(Andamento(f"Enviando {arquivo.name} ao Drive ({percentual:.0f}%)", percentual))
+
+    def repetir(tentativa: int, espera: float) -> None:
+        avisar(Andamento(f"A conexão falhou. Nova tentativa em {espera:.0f} s..."))
+
+    def esperar(segundos: float) -> None:
+        # A espera termina na hora em que a pessoa cancela.
+        if cancelamento.wait(segundos):
+            raise _Cancelada
+
+    avisar(Andamento("Enviando ao Drive..."))
+    try:
+        entregas = entregar(
+            servico, [pdf, pedido.audio], pedido.pastas, progredir, repetir, esperar
+        )
+        erros = [entrega.erro for entrega in entregas if entrega.erro]
+    except _Cancelada:
+        return "o envio foi cancelado."
+    except Exception as erro:
+        return f"erro inesperado: {erro}"
+    return " ".join(f"{erro}." for erro in erros) or None
 
 
 def _com_parcial(texto: str, parcial: Path | None) -> str:
@@ -174,7 +247,13 @@ class Janela:
         self.barra_em_vaivem = False
         self.pdf: Path | None = None
 
+        self.preferencias = preferencias.carregar()
+
         self.audio = tk.StringVar()
+        self.enviar = tk.BooleanVar(value=self.preferencias.enviar_ao_drive)
+        self.pasta_audio = tk.StringVar(value=self.preferencias.pasta_audio)
+        self.pasta_pdf = tk.StringVar(value=self.preferencias.pasta_pdf)
+        self.privacidade = tk.StringVar()
         self.situacao = tk.StringVar(value=TEXTO_INICIAL)
 
         raiz.title("Transcritor de aulas")
@@ -194,8 +273,25 @@ class Janela:
         self.botao_escolher = ttk.Button(quadro, text="Escolher...", command=self.escolher_audio)
         self.botao_escolher.grid(row=0, column=2, padx=(8, 0))
 
+        self.caixa_enviar = ttk.Checkbutton(
+            quadro,
+            text="Enviar o áudio e o PDF para o meu Google Drive",
+            variable=self.enviar,
+            command=self._mostrar_envio,
+        )
+        self.caixa_enviar.grid(row=1, column=0, columnspan=3, sticky="w", pady=(4, 0))
+        self.campos_das_pastas = []
+        for linha, rotulo, variavel in (
+            (2, "Pasta do áudio", self.pasta_audio),
+            (3, "Pasta do PDF", self.pasta_pdf),
+        ):
+            ttk.Label(quadro, text=rotulo).grid(row=linha, column=0, sticky="w", padx=(0, 8))
+            campo_da_pasta = ttk.Entry(quadro, textvariable=variavel)
+            campo_da_pasta.grid(row=linha, column=1, sticky="ew", pady=2)
+            self.campos_das_pastas.append(campo_da_pasta)
+
         botoes = ttk.Frame(quadro)
-        botoes.grid(row=1, column=0, columnspan=3, pady=(8, 4))
+        botoes.grid(row=4, column=0, columnspan=3, pady=(8, 4))
         self.botao_transcrever = ttk.Button(botoes, text="Transcrever", command=self.iniciar)
         self.botao_transcrever.grid(row=0, column=0, padx=4)
         self.botao_cancelar = ttk.Button(
@@ -208,24 +304,34 @@ class Janela:
         self.botao_abrir.grid(row=0, column=2, padx=4)
 
         self.barra = ttk.Progressbar(quadro, maximum=100)
-        self.barra.grid(row=2, column=0, columnspan=3, sticky="ew", pady=4)
+        self.barra.grid(row=5, column=0, columnspan=3, sticky="ew", pady=4)
 
         ttk.Label(quadro, textvariable=self.situacao, wraplength=480).grid(
-            row=3, column=0, columnspan=3, sticky="w"
+            row=6, column=0, columnspan=3, sticky="w"
         )
-        ttk.Label(quadro, text=TEXTO_PRIVACIDADE, foreground="gray").grid(
-            row=4, column=0, columnspan=3, sticky="w", pady=(8, 0)
+        ttk.Label(quadro, textvariable=self.privacidade, foreground="gray").grid(
+            row=7, column=0, columnspan=3, sticky="w", pady=(8, 0)
         )
 
         quadro.columnconfigure(1, weight=1)
+        self._mostrar_envio()
+
+    def _mostrar_envio(self) -> None:
+        """As pastas só podem ser escolhidas quando o envio está ligado."""
+        enviar = self.enviar.get()
+        self.privacidade.set(TEXTO_PRIVACIDADE_COM_DRIVE if enviar else TEXTO_PRIVACIDADE)
+        for campo in self.campos_das_pastas:
+            campo.configure(state="normal" if enviar else "disabled")
 
     def escolher_audio(self) -> None:
-        atual = Path(self.audio.get().strip().strip('"'))
+        # Sem áudio escolhido, a caixa abre na pasta da última aula.
+        texto = self.audio.get().strip().strip('"')
+        pasta = Path(texto).parent if texto else Path(self.preferencias.pasta_local or Path.home())
         escolhido = filedialog.askopenfilename(
             parent=self.raiz,
             title="Áudio da aula",
             filetypes=TIPOS_DE_ARQUIVO,
-            initialdir=atual.parent if atual.parent.is_dir() else Path.home(),
+            initialdir=pasta if pasta.is_dir() else Path.home(),
         )
         # Cancelar a caixa devolve um texto vazio; nesse caso, vale o de antes.
         if escolhido:
@@ -240,11 +346,14 @@ class Janela:
         if self.transcrevendo:
             return
 
+        escolhas = self._escolhas()
+        pastas = escolhas.nomes_das_pastas() if escolhas.enviar_ao_drive else None
         try:
-            pedido = preparar_pedido(self.audio.get())
+            pedido = preparar_pedido(self.audio.get(), pastas)
         except (AudioInvalido, SaidaInvalida) as erro:
             self.situacao.set(f"Erro: {erro}")
             return
+        self._lembrar(replace(escolhas, pasta_local=str(pedido.audio.resolve().parent)))
 
         duracao = "" if pedido.duracao is None else f" de {formatar_tempo(pedido.duracao)}"
         self.situacao.set(f"Áudio{duracao}. Preparando...")
@@ -260,6 +369,27 @@ class Janela:
         )
         self.thread.start()
         self.raiz.after(INTERVALO_DA_FILA_MS, self.ler_fila)
+
+    def _escolhas(self) -> preferencias.Preferencias:
+        """O que está na janela agora. Uma pasta em branco volta para o nome padrão."""
+        self.pasta_audio.set(preferencias.nome_ou_padrao(self.pasta_audio.get(), "audio"))
+        self.pasta_pdf.set(preferencias.nome_ou_padrao(self.pasta_pdf.get(), "pdf"))
+        return replace(
+            self.preferencias,
+            enviar_ao_drive=self.enviar.get(),
+            pasta_audio=self.pasta_audio.get(),
+            pasta_pdf=self.pasta_pdf.get(),
+        )
+
+    def _lembrar(self, escolhas: preferencias.Preferencias) -> None:
+        if escolhas == self.preferencias:
+            return
+        self.preferencias = escolhas
+        try:
+            preferencias.salvar(escolhas)
+        except OSError:
+            # Não lembrar da escolha não é motivo para não transcrever a aula.
+            pass
 
     def ler_fila(self) -> None:
         """Aplica na janela as mensagens deixadas pela thread de trabalho."""
@@ -300,12 +430,19 @@ class Janela:
         self.botao_escolher.configure(state=livre)
         self.botao_cancelar.configure(state="normal" if trabalhando else "disabled")
         self.botao_abrir.configure(state="normal" if self.pdf else "disabled")
+        self.caixa_enviar.configure(state=livre)
+        if trabalhando:
+            for campo in self.campos_das_pastas:
+                campo.configure(state="disabled")
+        else:
+            self._mostrar_envio()
 
     def _terminar(self, resultado: Resultado) -> None:
         self.thread = None
         self.pdf = resultado.pdf
         self.situacao.set(resultado.texto)
-        self._definir_barra(100 if resultado.sucesso else 0)
+        # Com o PDF pronto, a barra fica cheia mesmo que o envio tenha falhado.
+        self._definir_barra(100 if resultado.sucesso or resultado.pdf else 0)
         self._travar(False)
 
     def cancelar(self) -> None:

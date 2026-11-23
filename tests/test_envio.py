@@ -13,7 +13,7 @@ import pytest
 from httplib2 import Response
 from httplib2.error import ServerNotFoundError
 
-from transcritor import drive, envio
+from transcritor import drive, envio, preferencias
 from transcritor.envio import TAMANHO_DO_BLOCO, TENTATIVAS, FalhaNoEnvio, enviar_arquivo
 
 
@@ -299,6 +299,14 @@ def test_comando_enviar_separa_o_audio_do_pdf(comando, arquivo, capsys):
 
     assert comando == [("aula.mp3", "Transcritor - Áudios"), ("aula.PDF", "Transcritor - PDFs")]
     assert "aula.mp3 enviado para Transcritor - Áudios: https://drive/id" in capsys.readouterr().out
+
+
+def test_comando_enviar_usa_as_pastas_das_preferencias(comando, arquivo):
+    preferencias.salvar(preferencias.Preferencias(pasta_audio="Física"))
+
+    assert drive.main(["enviar", str(arquivo)]) == 0
+
+    assert comando == [("aula.mp3", "Física")]
 
 
 def test_falha_em_um_arquivo_nao_impede_os_outros(comando, arquivo, capsys):

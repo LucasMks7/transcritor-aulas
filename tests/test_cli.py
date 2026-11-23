@@ -4,9 +4,10 @@ import sys
 
 import pytest
 
-from transcritor import __version__, arquivos, cli
+from transcritor import __version__, arquivos, cli, drive, entrega, preferencias
 from transcritor.arquivos import caminho_parcial
 from transcritor.cli import formatar_progresso, formatar_tempo, main
+from transcritor.envio import ArquivoNoDrive
 from transcritor.transcricao import FalhaNaTranscricao, ModeloCarregado
 
 
@@ -350,3 +351,90 @@ def test_pdf_que_nao_pode_ser_gravado_avisa_que_o_texto_ficou_salvo(
     # Nem o PDF nem o parcial ficam para trás.
     assert not audio.with_suffix(".pdf").exists()
     assert not caminho_parcial(audio.with_suffix(".pdf")).exists()
+
+
+@pytest.fixture
+def entregas(monkeypatch):
+    """Troca o Drive por dublês e anota o que seria enviado."""
+    feitas = []
+
+    def entregar(servico, lista, nomes, *_):
+        for arquivo in lista:
+            feitas.append((arquivo.name, nomes[entrega.tipo_do_arquivo(arquivo)]))
+            yield entrega.Entrega(
+                arquivo, "Pasta", ArquivoNoDrive("id", arquivo.name, "https://drive/id")
+            )
+
+    monkeypatch.setattr(drive, "conectar", lambda: "credenciais")
+    monkeypatch.setattr(drive, "servico_do_drive", lambda credenciais: "serviço")
+    monkeypatch.setattr(entrega, "entregar", entregar)
+    return feitas
+
+
+def test_sem_enviar_o_drive_nao_e_usado_mesmo_com_a_preferencia_ligada(
+    audio, modelos_pedidos, entregas, monkeypatch
+):
+    preferencias.salvar(preferencias.Preferencias(enviar_ao_drive=True))
+    monkeypatch.setattr(drive, "conectar", lambda: pytest.fail("não devia conectar"))
+
+    assert main([str(audio)]) == 0
+
+    assert entregas == []
+
+
+def test_enviar_manda_o_pdf_e_o_audio_para_as_pastas_salvas(
+    capsys, audio, modelos_pedidos, entregas
+):
+    preferencias.salvar(preferencias.Preferencias(pasta_audio="Física"))
+
+    assert main([str(audio), "--enviar"]) == 0
+
+    assert entregas == [("aula.pdf", "Transcritor - PDFs"), ("aula.mp3", "Física")]
+    assert "aula.pdf enviado para Pasta: https://drive/id" in capsys.readouterr().out
+
+
+def test_sem_autorizacao_o_erro_aparece_antes_de_transcrever(
+    capsys, audio, modelos_pedidos, monkeypatch
+):
+    def falhar():
+        raise drive.FalhaNaAutorizacao("a autorização não foi concluída")
+
+    monkeypatch.setattr(drive, "conectar", falhar)
+
+    assert main([str(audio), "--enviar"]) == 1
+
+    assert modelos_pedidos == []
+    assert "rode de novo sem --enviar" in capsys.readouterr().err
+    assert sorted(p.name for p in audio.parent.iterdir()) == ["aula.mp3"]
+
+
+def test_falha_no_envio_ensina_a_tentar_de_novo(
+    capsys, audio, modelos_pedidos, entregas, monkeypatch
+):
+    monkeypatch.setattr(
+        entrega,
+        "entregar",
+        lambda servico, lista, *_: [
+            entrega.Entrega(arquivo, "Pasta", erro="a conexão falhou") for arquivo in lista
+        ],
+    )
+
+    assert main([str(audio), "--enviar"]) == 1
+
+    erro = capsys.readouterr().err
+    assert f'transcritor-drive enviar "{audio.with_suffix(".pdf")}" "{audio}"' in erro
+    assert audio.with_suffix(".pdf").is_file()
+
+
+def test_cancelar_o_envio_mantem_a_transcricao(
+    capsys, audio, modelos_pedidos, entregas, monkeypatch
+):
+    def cancelar(*_):
+        raise KeyboardInterrupt
+
+    monkeypatch.setattr(entrega, "entregar", cancelar)
+
+    assert main([str(audio), "--enviar"]) == 130
+
+    assert "A transcrição está salva no PC" in capsys.readouterr().err
+    assert audio.with_suffix(".pdf").is_file()

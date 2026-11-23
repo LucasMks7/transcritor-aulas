@@ -5,16 +5,22 @@ from types import SimpleNamespace
 
 import pytest
 
-from transcritor import arquivos
+from transcritor import arquivos, preferencias
 from transcritor import janela as modulo
 from transcritor.arquivos import SaidaInvalida, caminho_parcial
 from transcritor.audio import AudioInvalido
+from transcritor.drive import FalhaNaAutorizacao
+from transcritor.entrega import Entrega
+from transcritor.envio import ArquivoNoDrive
 from transcritor.janela import (
     TEXTO_CANCELADO,
     TEXTO_CANCELANDO,
     TEXTO_CARREGANDO,
+    TEXTO_CONECTANDO,
     TEXTO_GERANDO_PDF,
     TEXTO_INICIAL,
+    TEXTO_PRIVACIDADE,
+    TEXTO_PRIVACIDADE_COM_DRIVE,
     Andamento,
     Janela,
     Pedido,
@@ -226,6 +232,100 @@ def test_pdf_que_nao_pode_ser_gravado_avisa_que_o_texto_ficou_salvo(
     assert audio.with_suffix(".txt").is_file()
 
 
+PASTAS = {"audio": "Física", "pdf": "Resumos"}
+
+
+@pytest.fixture
+def drive_falso(monkeypatch):
+    """Troca a conexão e o envio por dublês. Anota o que seria enviado."""
+    falso = SimpleNamespace(enviados=[], erros={}, conexoes=0)
+
+    def conectar():
+        falso.conexoes += 1
+        return "serviço"
+
+    def entregar(servico, lista, nomes, ao_progredir, ao_repetir, esperar):
+        assert servico == "serviço"
+        for arquivo in lista:
+            ao_progredir(arquivo, 50, 100)
+            pasta = nomes["pdf" if arquivo.suffix == ".pdf" else "audio"]
+            if arquivo.suffix in falso.erros:
+                yield Entrega(arquivo, pasta, erro=falso.erros[arquivo.suffix])
+                continue
+            falso.enviados.append((arquivo.name, pasta))
+            yield Entrega(arquivo, pasta, ArquivoNoDrive("id", arquivo.name, "link"))
+
+    monkeypatch.setattr(modulo, "conectar_ao_drive", conectar)
+    monkeypatch.setattr(modulo, "entregar", entregar)
+    return falso
+
+
+def test_sem_pedir_o_envio_nada_fala_com_o_drive(audio, modelo_que_funciona, drive_falso):
+    executar(Pedido(audio, 1.0), lambda aviso: None, threading.Event())
+
+    assert drive_falso.conexoes == 0
+    assert drive_falso.enviados == []
+
+
+def test_envia_o_pdf_e_o_audio_para_as_pastas_pedidas(audio, modelo_que_funciona, drive_falso):
+    avisos = []
+
+    executar(Pedido(audio, 1.0, PASTAS), avisos.append, threading.Event())
+
+    assert avisos[0] == Andamento(TEXTO_CONECTANDO)
+    assert Andamento("Enviando aula.mp3 ao Drive (50%)", 50) in avisos
+    assert drive_falso.enviados == [("aula.pdf", "Resumos"), ("aula.mp3", "Física")]
+    assert avisos[-1].sucesso
+    assert "estão no seu Drive" in avisos[-1].texto
+
+
+def test_sem_acesso_ao_drive_a_aula_e_transcrita_mesmo_assim(
+    audio, modelo_que_funciona, drive_falso, monkeypatch
+):
+    def falhar():
+        raise FalhaNaAutorizacao("sem conexão com a internet")
+
+    monkeypatch.setattr(modulo, "conectar_ao_drive", falhar)
+    avisos = []
+
+    executar(Pedido(audio, 1.0, PASTAS), avisos.append, threading.Event())
+
+    resultado = avisos[-1]
+    assert not resultado.sucesso
+    assert resultado.pdf.is_file()
+    assert "sem conexão com a internet" in resultado.texto
+
+
+def test_falha_no_envio_de_um_arquivo_aparece_no_resultado(
+    audio, modelo_que_funciona, drive_falso
+):
+    drive_falso.erros[".mp3"] = "não há espaço livre no seu Google Drive"
+    avisos = []
+
+    executar(Pedido(audio, 1.0, PASTAS), avisos.append, threading.Event())
+
+    assert drive_falso.enviados == [("aula.pdf", "Resumos")]
+    assert not avisos[-1].sucesso
+    assert avisos[-1].pdf.is_file()
+    assert "não há espaço livre" in avisos[-1].texto
+
+
+def test_cancelar_durante_o_envio_mantem_o_pdf(audio, modelo_que_funciona, drive_falso):
+    cancelamento = threading.Event()
+    avisos = []
+
+    def avisar(mensagem):
+        avisos.append(mensagem)
+        if mensagem.texto.startswith("Enviando ao Drive"):
+            cancelamento.set()
+
+    executar(Pedido(audio, 1.0, PASTAS), avisar, cancelamento)
+
+    assert drive_falso.enviados == []
+    assert "o envio foi cancelado" in avisos[-1].texto
+    assert avisos[-1].pdf.is_file()
+
+
 # --- Janela de verdade: precisa de uma tela, então é pulada no Linux do CI. ---
 
 
@@ -366,6 +466,84 @@ def test_cancelar_interrompe_e_libera_a_janela(janela, audio, usar_modelo):
     assert janela.barra.cget("value") == 0
     assert estado(janela.botao_transcrever) == "normal"
     assert estado(janela.botao_abrir) == "disabled"
+
+
+def test_as_pastas_so_podem_ser_editadas_com_o_envio_ligado(janela):
+    assert [estado(campo) for campo in janela.campos_das_pastas] == ["disabled"] * 2
+    assert janela.privacidade.get() == TEXTO_PRIVACIDADE
+
+    janela.caixa_enviar.invoke()
+
+    assert [estado(campo) for campo in janela.campos_das_pastas] == ["normal"] * 2
+    assert janela.privacidade.get() == TEXTO_PRIVACIDADE_COM_DRIVE
+
+
+def test_transcrever_lembra_das_escolhas(janela, audio, modelo_que_funciona, drive_falso):
+    janela.audio.set(str(audio))
+    janela.caixa_enviar.invoke()
+    janela.pasta_audio.set("  Física   I ")
+    janela.pasta_pdf.set("")
+
+    janela.iniciar()
+    esperar_o_fim(janela)
+
+    # A pasta em branco volta para o padrão, e isso aparece no campo.
+    assert janela.pasta_pdf.get() == "Transcritor - PDFs"
+    assert drive_falso.enviados == [
+        ("aula.pdf", "Transcritor - PDFs"),
+        ("aula.mp3", "Física I"),
+    ]
+    assert preferencias.carregar() == preferencias.Preferencias(
+        True, "Física I", "Transcritor - PDFs", str(audio.resolve().parent)
+    )
+
+
+def test_a_janela_abre_com_o_que_foi_lembrado(tk_da_sessao, monkeypatch, tmp_path):
+    preferencias.salvar(preferencias.Preferencias(True, "Física", "Resumos", str(tmp_path)))
+    topo = tk.Toplevel(tk_da_sessao)
+    topo.withdraw()
+    janela = Janela(topo)
+    pedidos = []
+    monkeypatch.setattr(
+        modulo.filedialog, "askopenfilename", lambda **opcoes: pedidos.append(opcoes) or ""
+    )
+
+    janela.escolher_audio()
+
+    assert janela.enviar.get()
+    assert (janela.pasta_audio.get(), janela.pasta_pdf.get()) == ("Física", "Resumos")
+    assert pedidos[0]["initialdir"] == tmp_path
+    topo.destroy()
+
+
+def test_nao_conseguir_lembrar_nao_impede_a_transcricao(
+    janela, audio, modelo_que_funciona, monkeypatch
+):
+    def falhar(escolhas):
+        raise PermissionError(13, "Permission denied")
+
+    monkeypatch.setattr(preferencias, "salvar", falhar)
+    janela.audio.set(str(audio))
+
+    janela.iniciar()
+    esperar_o_fim(janela)
+
+    assert janela.situacao.get().startswith("Pronto!")
+
+
+def test_durante_o_trabalho_as_opcoes_de_envio_ficam_travadas(
+    janela, audio, modelo_que_funciona, drive_falso
+):
+    janela.audio.set(str(audio))
+    janela.caixa_enviar.invoke()
+
+    janela.iniciar()
+
+    assert estado(janela.caixa_enviar) == "disabled"
+    assert [estado(campo) for campo in janela.campos_das_pastas] == ["disabled"] * 2
+    esperar_o_fim(janela)
+    assert estado(janela.caixa_enviar) == "normal"
+    assert [estado(campo) for campo in janela.campos_das_pastas] == ["normal"] * 2
 
 
 def test_fechar_a_janela_pede_o_cancelamento(janela, audio, usar_modelo):

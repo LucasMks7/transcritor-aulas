@@ -2,7 +2,7 @@
 
 [![Testes](https://github.com/LucasMks7/transcritor-aulas/actions/workflows/testes.yml/badge.svg)](https://github.com/LucasMks7/transcritor-aulas/actions/workflows/testes.yml)
 
-Transcreve o áudio de uma aula no próprio PC, com o [faster-whisper](https://github.com/SYSTRAN/faster-whisper). O áudio não é enviado para nenhum serviço: depois do download inicial do modelo, a transcrição funciona sem internet.
+Transcreve o áudio de uma aula no próprio PC, com o [faster-whisper](https://github.com/SYSTRAN/faster-whisper). A transcrição não usa nenhum serviço externo: depois do download inicial do modelo, ela funciona sem internet. Se a pessoa pedir, o áudio e o PDF vão para o Google Drive dela.
 
 > **Status:** em desenvolvimento. O plano completo, com envio para o Google Drive, está em [PLANO.md](PLANO.md).
 
@@ -15,6 +15,7 @@ transcrever aula.mp3                           # cria aula.txt e aula.pdf ao lad
 transcrever aula.mp3 --saida anotacoes.txt     # cria anotacoes.txt e anotacoes.pdf
 transcrever aula.mp3 --modelo large-v3-turbo   # erra menos e demora mais
 transcrever aula.mp3 --dispositivo cpu         # não usa a placa de vídeo
+transcrever aula.mp3 --enviar                  # no fim, envia o PDF e o áudio ao seu Drive
 ```
 
 Na primeira vez, o modelo é baixado da internet. Depois disso, o comando funciona sem conexão.
@@ -24,11 +25,12 @@ Na primeira vez, o modelo é baixado da internet. Depois disso, o comando funcio
 | `--saida` | caminho do arquivo de texto; o PDF fica ao lado | o nome do áudio, com `.txt` |
 | `--modelo` | `tiny`, `base`, `small`, `medium`, `large-v3-turbo` | `large-v3-turbo` na placa de vídeo, `small` no processador |
 | `--dispositivo` | `auto`, `cuda` (placa de vídeo da NVIDIA), `cpu` | `auto` |
+| `--enviar` | não recebe valor | desligado |
 
 | Código de saída | Significado |
 | --- | --- |
 | `0` | Transcrição salva |
-| `1` | A transcrição falhou (modelo não carregado, falta de memória etc.) ou o PDF não pôde ser gravado |
+| `1` | A transcrição falhou (modelo não carregado, falta de memória etc.) o PDF não pôde ser gravado ou o envio ao Drive falhou |
 | `2` | Entrada inválida (arquivo de áudio, arquivo de saída ou opções) |
 | `130` | Cancelado com `Ctrl+C` |
 
@@ -44,7 +46,15 @@ Basta escolher o áudio e clicar em **Transcrever**. A janela mostra quanto do �
 
 **Cancelar** para a transcrição no próximo trecho, e o que já estava pronto fica no arquivo `.parcial`. Enquanto o modelo é baixado, na primeira vez, o cancelamento só acontece quando o download termina.
 
+Com **Enviar o áudio e o PDF para o meu Google Drive** marcado, os dois arquivos vão para as pastas escolhidas depois que o PDF fica pronto. A conexão com o Drive é feita antes da transcrição, com a pessoa ainda na frente do PC; se ela falhar, a aula é transcrita mesmo assim.
+
 A janela e o terminal usam o mesmo código para conferir o áudio, transcrever e gravar os arquivos. A transcrição roda em outra thread, para a janela continuar respondendo, e manda o andamento para ela por uma fila, porque o Tkinter só aceita ser usado pela thread que o criou.
+
+### Google Drive e preferências
+
+O envio é opcional e vem desligado. O programa só enxerga no Drive o que ele mesmo criou, retoma um envio interrompido de onde parou e não cria cópias de um arquivo que já está lá. Como configurar e como funciona: [docs/google-drive.md](docs/google-drive.md).
+
+A janela lembra se o envio está ligado, os nomes das pastas do Drive e a pasta do último áudio. As preferências ficam em `%APPDATA%\transcritor-aulas\preferencias.json`; um arquivo estragado volta para o padrão. No terminal, o envio só acontece com `--enviar`, mesmo que esteja ligado na janela.
 
 ### PDF
 

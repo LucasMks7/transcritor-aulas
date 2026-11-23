@@ -2,7 +2,7 @@
 
 import pytest
 
-from transcritor import drive, pastas
+from transcritor import drive, pastas, preferencias
 from transcritor.pastas import (
     FalhaNoDrive,
     Pasta,
@@ -226,6 +226,21 @@ def test_comando_pasta_pdf_sem_resposta_cria_a_pasta_padrao_do_pdf(monkeypatch, 
     saida = capsys.readouterr().out
     assert "para o PDF" in saida
     assert "Pasta do PDF: Transcritor - PDFs" in saida
+
+
+def test_a_pasta_escolhida_vale_para_os_proximos_usos(monkeypatch, capsys):
+    servico = DriveFalso()
+    monkeypatch.setattr(drive, "conectar", lambda: object())
+    monkeypatch.setattr(drive, "servico_do_drive", lambda _c: servico)
+    assert drive.main(["pasta-audio", "--nome", "Física"]) == 0
+    assert drive.main(["pasta-pdf", "--nome", "Resumos"]) == 0
+
+    assert preferencias.carregar().nomes_das_pastas() == {"audio": "Física", "pdf": "Resumos"}
+
+    # Enter mantém a pasta em uso.
+    monkeypatch.setattr("builtins.input", lambda _p: "")
+    assert drive.main(["pasta-audio"]) == 0
+    assert preferencias.carregar().pasta_audio == "Física"
 
 
 def test_pdf_pode_ir_para_a_mesma_pasta_do_audio(monkeypatch, capsys):

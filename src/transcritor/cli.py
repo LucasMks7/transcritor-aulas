@@ -7,7 +7,7 @@ from collections.abc import Sequence
 from datetime import date
 from pathlib import Path
 
-from transcritor import __version__
+from transcritor import __version__, drive, entrega, preferencias
 from transcritor.arquivos import (
     SaidaInvalida,
     TextoParcial,
@@ -34,6 +34,8 @@ LARGURA_DA_LINHA = 70
 CODIGO_FALHA_NA_TRANSCRICAO = 1
 # O texto foi salvo, mas o PDF não: também é falha, para um script perceber.
 CODIGO_FALHA_NO_PDF = 1
+# O mesmo vale para os arquivos que não chegaram ao Drive.
+CODIGO_FALHA_NO_ENVIO = 1
 # Mesmo código que o argparse usa para erros de uso.
 CODIGO_ENTRADA_INVALIDA = 2
 # Convenção dos terminais para programa interrompido com Ctrl+C.
@@ -104,8 +106,8 @@ def descrever_modelo(carregado: ModeloCarregado) -> str:
 def criar_parser() -> argparse.ArgumentParser:
     parser = ParserEmPortugues(
         prog="transcrever",
-        description="Transcreve um arquivo de áudio em português, sem enviá-lo "
-        "para fora do PC.",
+        description="Transcreve um arquivo de áudio em português, no próprio PC. "
+        "Nada é enviado para a internet, a não ser com --enviar.",
     )
     parser.add_argument("audio", type=Path, help="arquivo de áudio a transcrever")
     parser.add_argument(
@@ -127,6 +129,13 @@ def criar_parser() -> argparse.ArgumentParser:
         default=DISPOSITIVO_PADRAO,
         help="onde transcrever: cuda é a placa de vídeo da NVIDIA, cpu é o "
         "processador, e auto usa a placa quando ela funciona (padrão: %(default)s)",
+    )
+    # No terminal, o envio é sempre pedido na hora. A preferência marcada na janela
+    # não vale aqui, para um comando antigo não passar a enviar áudios sem aviso.
+    parser.add_argument(
+        "--enviar",
+        action="store_true",
+        help="no fim, envia o PDF e o áudio para as suas pastas do Google Drive",
     )
     parser.add_argument(
         "--version",
@@ -165,6 +174,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         texto.guardar(segmento)
         mostrar_progresso(segmento.fim, total)
 
+    servico = None
+    if argumentos.enviar:
+        # Antes de transcrever: o navegador não pode ficar esperando a pessoa
+        # voltar depois de uma hora.
+        try:
+            servico = drive.servico_do_drive(drive.conectar())
+        except drive.FalhaNaAutorizacao as erro:
+            print(f"transcrever: erro: {erro}", file=sys.stderr)
+            print("Para só transcrever, rode de novo sem --enviar.", file=sys.stderr)
+            texto.abandonar()
+            return CODIGO_FALHA_NO_ENVIO
+        except KeyboardInterrupt:
+            texto.abandonar()
+            return CODIGO_CANCELADO
+
     if duracao is not None:
         print(f"Áudio de {formatar_tempo(duracao)}.", file=sys.stderr)
 
@@ -202,7 +226,34 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         return CODIGO_FALHA_NO_PDF
     print(f"PDF salvo em: {pdf}")
+    if servico is not None:
+        return enviar(servico, pdf, audio)
     return 0
+
+
+def enviar(servico, pdf: Path, audio: Path) -> int:
+    """Envia o PDF primeiro: é pequeno, e é o que a pessoa mais quer."""
+    codigo = 0
+    nomes = preferencias.carregar().nomes_das_pastas()
+    try:
+        for entregue in entrega.entregar(
+            servico, [pdf, audio], nomes, drive.mostrar_envio, drive.mostrar_repeticao
+        ):
+            if entregue.erro:
+                print(f"transcrever: {entrega.descrever(entregue)}", file=sys.stderr)
+                codigo = CODIGO_FALHA_NO_ENVIO
+            else:
+                print(entrega.descrever(entregue))
+    except KeyboardInterrupt:
+        print("\nEnvio cancelado.", file=sys.stderr)
+        codigo = CODIGO_CANCELADO
+    if codigo != 0:
+        print(
+            "A transcrição está salva no PC. Para tentar o envio de novo: "
+            f'transcritor-drive enviar "{pdf}" "{audio}"',
+            file=sys.stderr,
+        )
+    return codigo
 
 
 def avisar_do_parcial(texto: TextoParcial) -> None:

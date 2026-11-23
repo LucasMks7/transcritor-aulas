@@ -16,6 +16,7 @@ import argparse
 import os
 import sys
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 
 ESCOPOS = ["https://www.googleapis.com/auth/drive.file"]
@@ -193,7 +194,7 @@ def main(argv=None) -> int:
     parser.add_argument(
         "--nome",
         help="com pasta-audio ou pasta-pdf: usa a pasta com esse nome, criando-a se preciso, "
-        "sem perguntar",
+        "sem perguntar. A escolha vale para os próximos envios",
     )
     argumentos = parser.parse_args(argv)
 
@@ -226,7 +227,7 @@ def main(argv=None) -> int:
 
 
 def _comando_de_pastas(argumentos) -> int:
-    from transcritor import pastas
+    from transcritor import pastas, preferencias
 
     try:
         servico = servico_do_drive(conectar())
@@ -238,13 +239,25 @@ def _comando_de_pastas(argumentos) -> int:
                 print(pasta.nome)
             return 0
         # "pasta-audio" -> DESTINOS["audio"], "pasta-pdf" -> DESTINOS["pdf"]
-        destino = pastas.DESTINOS[argumentos.acao.removeprefix("pasta-")]
+        tipo = argumentos.acao.removeprefix("pasta-")
+        destino = pastas.DESTINOS[tipo]
+        salvas = preferencias.carregar()
         if argumentos.nome:
             escolhida = pastas.obter_ou_criar(servico, argumentos.nome)
         else:
-            escolhida = pastas.escolher_pasta(servico, destino.finalidade, destino.nome_padrao)
+            # Enter mantém a pasta em uso, e não a padrão de fábrica.
+            em_uso = salvas.nomes_das_pastas()[tipo]
+            escolhida = pastas.escolher_pasta(servico, destino.finalidade, em_uso)
+        # "audio" -> o campo pasta_audio das preferências
+        preferencias.salvar(replace(salvas, **{f"pasta_{tipo}": escolhida.nome}))
     except (FalhaNaAutorizacao, pastas.FalhaNoDrive, ValueError) as erro:
         print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
+        return 1
+    except OSError as erro:
+        print(
+            f"transcritor-drive: erro: não foi possível salvar a escolha: {erro.strerror}",
+            file=sys.stderr,
+        )
         return 1
     except (EOFError, KeyboardInterrupt):
         print("\nNenhuma pasta escolhida.", file=sys.stderr)
@@ -253,40 +266,38 @@ def _comando_de_pastas(argumentos) -> int:
     return 0
 
 
+def mostrar_envio(arquivo: Path, enviado: int, total: int) -> None:
+    """Reescreve a mesma linha do terminal; redirecionada, a saída fica sem progresso."""
+    if sys.stderr.isatty():
+        fim = "\n" if enviado == total else ""
+        texto = f"\rEnviando {arquivo.name} ({enviado / total:.0%})"
+        print(texto, end=fim, file=sys.stderr, flush=True)
+
+
+def mostrar_repeticao(tentativa: int, espera: float) -> None:
+    from transcritor.envio import TENTATIVAS
+
+    print(
+        f"A conexão falhou. Tentativa {tentativa} de {TENTATIVAS} em {espera:.0f} s...",
+        file=sys.stderr,
+    )
+
+
 def _comando_enviar(arquivos: list[Path]) -> int:
-    """Envia cada arquivo; a falha de um não impede o envio dos outros."""
-    from transcritor import envio, pastas
-
-    def progresso(enviado: int, total: int) -> None:
-        if sys.stderr.isatty():
-            fim = "\n" if enviado == total else ""
-            print(f"\r  {enviado / total:.0%}   ", end=fim, file=sys.stderr, flush=True)
-
-    def repeticao(tentativa: int, espera: float) -> None:
-        print(
-            f"A conexão falhou. Tentativa {tentativa} de {envio.TENTATIVAS} "
-            f"em {espera:.0f} s...",
-            file=sys.stderr,
-        )
+    from transcritor import preferencias
+    from transcritor.entrega import descrever, entregar
 
     falhou = False
-    destinos: dict[str, pastas.Pasta] = {}
     try:
         servico = servico_do_drive(conectar())
-        for arquivo in arquivos:
-            tipo = "pdf" if arquivo.suffix.lower() == ".pdf" else "audio"
-            if tipo not in destinos:
-                destinos[tipo] = pastas.obter_ou_criar(servico, pastas.DESTINOS[tipo].nome_padrao)
-            pasta = destinos[tipo]
-            try:
-                enviado = envio.enviar_arquivo(servico, arquivo, pasta.id, progresso, repeticao)
-            except envio.FalhaNoEnvio as erro:
-                print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
+        nomes = preferencias.carregar().nomes_das_pastas()
+        for entrega in entregar(servico, arquivos, nomes, mostrar_envio, mostrar_repeticao):
+            if entrega.erro:
+                print(f"transcritor-drive: {descrever(entrega)}", file=sys.stderr)
                 falhou = True
-                continue
-            situacao = "já estava em" if enviado.ja_estava_la else "enviado para"
-            print(f"{enviado.nome} {situacao} {pasta.nome}: {enviado.link}")
-    except (FalhaNaAutorizacao, pastas.FalhaNoDrive) as erro:
+            else:
+                print(descrever(entrega))
+    except FalhaNaAutorizacao as erro:
         print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:

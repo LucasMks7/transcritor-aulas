@@ -40,7 +40,7 @@ transcritor-drive pasta-pdf                       # o mesmo para a pasta do PDF
 - O Drive aceita duas pastas com o mesmo nome. Por isso o transcritor procura a pasta pelo nome antes de criar e reaproveita a que já existe.
 - Uma pasta que foi para a lixeira some da lista.
 - Os nomes padrão são `Transcritor - Áudios` e `Transcritor - PDFs`. O PDF também pode ir para a mesma pasta do áudio: basta escolher o número dela.
-- Enquanto as preferências não forem salvas (sessão 22), o comando só mostra a pasta escolhida e o ID dela.
+- A escolha fica nas preferências e vale para os próximos envios, do terminal e da janela. Ela é guardada pelo nome, e não pelo ID: se a pasta for apagada, o próximo envio cria outra com o mesmo nome. Em troca, renomear a pasta no Drive faz o programa criar uma nova com o nome antigo.
 
 ## Enviar
 
