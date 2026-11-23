@@ -40,7 +40,7 @@ class FalhaNoDrive(RuntimeError):
     """O Google Drive recusou o pedido ou não respondeu."""
 
 
-def _texto_na_busca(texto: str) -> str:
+def texto_na_busca(texto: str) -> str:
     # Na linguagem de busca do Drive, o texto vai entre aspas simples. Barra
     # invertida e aspas dentro dele precisam de escape: "Aula d'água" é um nome válido.
     return "'" + texto.replace("\\", "\\\\").replace("'", "\\'") + "'"
@@ -102,7 +102,7 @@ def criar_pasta(servico, nome: str) -> Pasta:
 def obter_ou_criar(servico, nome: str) -> Pasta:
     """A pasta do transcritor com esse nome, criada agora se ainda não existir."""
     nome = limpar_nome(nome)
-    existentes = _buscar(servico, f"name = {_texto_na_busca(nome)}")
+    existentes = _buscar(servico, f"name = {texto_na_busca(nome)}")
     return existentes[0] if existentes else criar_pasta(servico, nome)
 
 

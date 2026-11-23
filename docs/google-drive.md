@@ -42,6 +42,19 @@ transcritor-drive pasta-pdf                       # o mesmo para a pasta do PDF
 - Os nomes padrão são `Transcritor - Áudios` e `Transcritor - PDFs`. O PDF também pode ir para a mesma pasta do áudio: basta escolher o número dela.
 - Enquanto as preferências não forem salvas (sessão 22), o comando só mostra a pasta escolhida e o ID dela.
 
+## Enviar
+
+```text
+transcritor-drive enviar aula.mp3 aula.pdf   # o .pdf vai para a pasta do PDF, o resto para a do áudio
+```
+
+- **Retomada.** O arquivo vai em blocos de 2 MB. Se a conexão cair, o programa pergunta ao Drive até onde chegou e continua dali.
+- **Nova tentativa.** Quedas de conexão, erros 5xx e pedidos de "mais devagar" (429 e limites de ritmo do 403) são repetidos até 6 vezes, com esperas que dobram: 1, 2, 4, 8 e 16 segundos. Cada bloco entregue zera a contagem. Pasta apagada, falta de espaço e recusas do Drive param na hora, porque repetir não resolve.
+- **Sem cópias.** Um arquivo com o mesmo nome e o mesmo conteúdo (MD5) que já está na pasta não é enviado de novo. O mesmo nome com outro conteúdo vira um arquivo novo: o gravador do celular dá o mesmo nome a aulas diferentes, e substituir apagaria uma delas.
+- A falha em um arquivo não impede o envio dos outros, e o original nunca é apagado do PC.
+
+Conferido no Drive de verdade em 23 de novembro de 2026: 5 MB com uma queda forçada no segundo bloco, retomados sem reenviar o que já tinha chegado.
+
 Para revogar o acesso também no Google, use [myaccount.google.com/permissions](https://myaccount.google.com/permissions).
 
 ## Quando a autorização deixa de valer

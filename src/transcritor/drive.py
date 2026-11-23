@@ -178,10 +178,17 @@ def main(argv=None) -> int:
     )
     parser.add_argument(
         "acao",
-        choices=("conectar", "desconectar", "pastas", "pasta-audio", "pasta-pdf"),
+        choices=("conectar", "desconectar", "pastas", "pasta-audio", "pasta-pdf", "enviar"),
         help="conectar pede a autorização no navegador; desconectar a esquece neste PC; "
         "pastas lista as pastas do transcritor; pasta-audio e pasta-pdf escolhem ou criam "
-        "a pasta de destino de cada arquivo",
+        "a pasta de destino de cada arquivo; enviar manda os arquivos para essas pastas",
+    )
+    parser.add_argument(
+        "arquivos",
+        nargs="*",
+        type=Path,
+        help="com enviar: os arquivos; um .pdf vai para a pasta do PDF, e os outros, "
+        "para a do áudio",
     )
     parser.add_argument(
         "--nome",
@@ -189,6 +196,13 @@ def main(argv=None) -> int:
         "sem perguntar",
     )
     argumentos = parser.parse_args(argv)
+
+    if argumentos.acao == "enviar":
+        if not argumentos.arquivos:
+            parser.error("informe os arquivos a enviar")
+        return _comando_enviar(argumentos.arquivos)
+    if argumentos.arquivos:
+        parser.error("só a ação enviar recebe arquivos")
 
     if argumentos.acao in ("pastas", "pasta-audio", "pasta-pdf"):
         return _comando_de_pastas(argumentos)
@@ -237,6 +251,48 @@ def _comando_de_pastas(argumentos) -> int:
         return 1
     print(f"{destino.rotulo}: {escolhida.nome} (id {escolhida.id})")
     return 0
+
+
+def _comando_enviar(arquivos: list[Path]) -> int:
+    """Envia cada arquivo; a falha de um não impede o envio dos outros."""
+    from transcritor import envio, pastas
+
+    def progresso(enviado: int, total: int) -> None:
+        if sys.stderr.isatty():
+            fim = "\n" if enviado == total else ""
+            print(f"\r  {enviado / total:.0%}   ", end=fim, file=sys.stderr, flush=True)
+
+    def repeticao(tentativa: int, espera: float) -> None:
+        print(
+            f"A conexão falhou. Tentativa {tentativa} de {envio.TENTATIVAS} "
+            f"em {espera:.0f} s...",
+            file=sys.stderr,
+        )
+
+    falhou = False
+    destinos: dict[str, pastas.Pasta] = {}
+    try:
+        servico = servico_do_drive(conectar())
+        for arquivo in arquivos:
+            tipo = "pdf" if arquivo.suffix.lower() == ".pdf" else "audio"
+            if tipo not in destinos:
+                destinos[tipo] = pastas.obter_ou_criar(servico, pastas.DESTINOS[tipo].nome_padrao)
+            pasta = destinos[tipo]
+            try:
+                enviado = envio.enviar_arquivo(servico, arquivo, pasta.id, progresso, repeticao)
+            except envio.FalhaNoEnvio as erro:
+                print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
+                falhou = True
+                continue
+            situacao = "já estava em" if enviado.ja_estava_la else "enviado para"
+            print(f"{enviado.nome} {situacao} {pasta.nome}: {enviado.link}")
+    except (FalhaNaAutorizacao, pastas.FalhaNoDrive) as erro:
+        print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("\nEnvio cancelado.", file=sys.stderr)
+        return 130
+    return 1 if falhou else 0
 
 
 if __name__ == "__main__":
