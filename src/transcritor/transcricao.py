@@ -41,6 +41,11 @@ SEGUNDOS_DE_BUSCA_DO_CORTE = 30
 SEGUNDOS_DA_JANELA_DE_VOLUME = 0.2
 
 
+# Abaixo disto, o áudio lido é bem menor que o declarado. A folga existe porque
+# a duração de um MP3 de taxa variável é só uma estimativa.
+FRACAO_MINIMA_LIDA = 0.9
+
+
 class FalhaNaTranscricao(RuntimeError):
     """O modelo não pôde ser carregado ou o áudio não pôde ser transcrito."""
 
@@ -226,6 +231,42 @@ def ler_amostras(audio: Path) -> np.ndarray:
     return decode_audio(str(audio), sampling_rate=TAXA_DE_AMOSTRAGEM)
 
 
+def _ler_ou_falhar(audio: Path) -> np.ndarray:
+    """O cabeçalho já foi conferido; aqui aparece o áudio estragado por dentro."""
+    import av
+
+    try:
+        amostras = ler_amostras(audio)
+    except (av.error.FFmpegError, OSError) as erro:
+        raise FalhaNaTranscricao(
+            f"O áudio está danificado ou não pôde ser lido até o fim: {erro}"
+        ) from erro
+    if len(amostras) == 0:
+        raise FalhaNaTranscricao("O arquivo não tem nenhum som para transcrever.")
+    return amostras
+
+
+def avisos_da_transcricao(
+    transcricao: Transcricao, duracao_declarada: float | None
+) -> list[str]:
+    """O que a pessoa precisa saber mesmo quando a transcrição termina bem.
+
+    Um download interrompido deixa um arquivo que diz ter uma hora e só tem vinte
+    minutos. O decodificador não reclama, e a transcrição pararia no meio da aula
+    sem ninguém notar.
+    """
+    avisos = []
+    if duracao_declarada and transcricao.duracao < duracao_declarada * FRACAO_MINIMA_LIDA:
+        avisos.append(
+            f"Atenção: o arquivo diz ter {formatar_tempo(duracao_declarada)}, mas só "
+            f"{formatar_tempo(transcricao.duracao)} puderam ser lidos. Ele pode estar "
+            "incompleto ou danificado."
+        )
+    if not transcricao.segmentos:
+        avisos.append("Atenção: nenhuma fala foi encontrada no áudio.")
+    return avisos
+
+
 def ponto_mais_silencioso(amostras: np.ndarray, taxa: int = TAXA_DE_AMOSTRAGEM) -> int:
     """Devolve a posição do meio da janela de menor volume do trecho."""
     janela = max(int(SEGUNDOS_DA_JANELA_DE_VOLUME * taxa), 1)
@@ -279,7 +320,7 @@ def transcrever(
     """
     prontos = []
     try:
-        amostras = ler_amostras(audio)
+        amostras = _ler_ou_falhar(audio)
         duracao = len(amostras) / TAXA_DE_AMOSTRAGEM
 
         blocos = dividir_em_blocos(amostras, segundos_por_bloco=segundos_por_bloco)

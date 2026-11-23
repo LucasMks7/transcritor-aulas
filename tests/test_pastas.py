@@ -1,9 +1,16 @@
 """Pastas de destino no Drive com um Drive falso em memória: nada sai do PC."""
 
+from http.client import BadStatusLine
+
 import pytest
+from google.auth.exceptions import RefreshError, TransportError
+from googleapiclient.errors import HttpError
+from httplib2 import Response
+from httplib2.error import ServerNotFoundError
 
 from transcritor import drive, pastas, preferencias
 from transcritor.pastas import (
+    AutorizacaoExpirada,
     FalhaNoDrive,
     Pasta,
     criar_pasta,
@@ -127,11 +134,49 @@ def test_aspas_no_nome_nao_quebram_a_busca():
     assert "name = 'Aula d\\'água'" in servico.consultas[0]
 
 
-def test_falha_do_drive_vira_mensagem_clara():
-    servico = DriveFalso(erro=OSError("sem internet"))
+@pytest.mark.parametrize(
+    "erro",
+    [OSError("rede"), ServerNotFoundError("dns"), TransportError("rede"), BadStatusLine("")],
+)
+def test_sem_internet_vira_mensagem_clara(erro):
+    with pytest.raises(FalhaNoDrive, match="Confira a conexão"):
+        listar_pastas(DriveFalso(erro=erro))
 
-    with pytest.raises(FalhaNoDrive, match="não respondeu"):
-        listar_pastas(servico)
+
+def test_recusa_do_drive_traz_o_codigo_e_o_motivo():
+    corpo = b'{"error": {"errors": [{"reason": "accessNotConfigured"}]}}'
+    erro = HttpError(Response({"status": 403}), corpo)
+
+    with pytest.raises(FalhaNoDrive, match=r"recusou o pedido \(403 accessNotConfigured\)"):
+        listar_pastas(DriveFalso(erro=erro))
+
+
+@pytest.mark.parametrize(
+    "erro", [RefreshError("invalid_grant"), HttpError(Response({"status": 401}), b"")]
+)
+def test_autorizacao_expirada_e_reconhecida(erro):
+    with pytest.raises(AutorizacaoExpirada, match="expirou"):
+        listar_pastas(DriveFalso(erro=erro))
+
+
+def test_defeito_do_programa_nao_vira_falha_do_drive():
+    with pytest.raises(KeyError):
+        listar_pastas(DriveFalso(erro=KeyError("id")))
+
+
+def test_comando_com_autorizacao_expirada_esquece_o_token(monkeypatch, capsys):
+    salvo = drive.caminho_do_token()
+    salvo.parent.mkdir(parents=True, exist_ok=True)
+    salvo.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(drive, "conectar", lambda: object())
+    monkeypatch.setattr(
+        drive, "servico_do_drive", lambda _c: DriveFalso(erro=RefreshError("invalid_grant"))
+    )
+
+    assert drive.main(["pastas"]) == 1
+
+    assert "transcritor-drive conectar" in capsys.readouterr().err
+    assert not salvo.exists()
 
 
 def test_escolher_pelo_numero():

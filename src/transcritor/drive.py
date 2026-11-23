@@ -14,13 +14,22 @@ Dois arquivos ficam na pasta de configuração do usuário, fora do repositório
 
 import argparse
 import os
+import socket
 import sys
+import urllib.request
 from collections.abc import Callable
 from dataclasses import replace
 from pathlib import Path
 
+COMO_RECONECTAR = "Para entrar de novo na conta: transcritor-drive conectar"
+
 ESCOPOS = ["https://www.googleapis.com/auth/drive.file"]
 NOME_DA_PASTA = "transcritor-aulas"
+
+
+# Tempo para a pessoa entrar na conta. Sem limite, fechar a aba do navegador
+# deixaria o programa esperando para sempre.
+SEGUNDOS_PARA_AUTORIZAR = 300
 
 
 class FalhaNaAutorizacao(RuntimeError):
@@ -52,9 +61,22 @@ def _autorizar_no_navegador(client_secret: Path):
     # porta livre escolhida na hora. Nada passa por servidor nosso.
     return fluxo.run_local_server(
         port=0,
+        timeout_seconds=SEGUNDOS_PARA_AUTORIZAR,
         authorization_prompt_message="Abrindo o navegador para você entrar na conta do Google...",
         success_message="Pronto! Pode fechar esta aba e voltar ao transcritor.",
     )
+
+
+def _ha_internet() -> bool:
+    """Se dá para chegar ao servidor de login do Google."""
+    if urllib.request.getproxies():
+        # Atrás de um proxy, a conexão direta falha mesmo com a internet funcionando.
+        return True
+    try:
+        socket.create_connection(("oauth2.googleapis.com", 443), timeout=5).close()
+    except OSError:
+        return False
+    return True
 
 
 def _ler_token(token: Path):
@@ -77,9 +99,12 @@ def carregar_credenciais(
     """Devolve a autorização salva, renovada se preciso, ou None se não houver uma válida.
 
     Uma autorização revogada pela pessoa, ou vencida, é apagada: o próximo
-    passo é pedir uma nova no navegador.
+    passo é pedir uma nova no navegador. Sem internet, ela é mantida, e a função
+    levanta FalhaNaAutorizacao.
     """
-    from google.auth.exceptions import RefreshError
+    from google.auth.exceptions import GoogleAuthError
+
+    from transcritor.rede import SEM_RESPOSTA, autorizacao_expirou
 
     token = token or caminho_do_token()
     if not token.is_file():
@@ -96,7 +121,9 @@ def carregar_credenciais(
     if credenciais.refresh_token:
         try:
             renovar(credenciais)
-        except RefreshError:
+        except (GoogleAuthError, OSError) as erro:
+            if not autorizacao_expirou(erro):
+                raise FalhaNaAutorizacao(SEM_RESPOSTA) from erro
             token.unlink()
             return None
         salvar_token(credenciais, token)
@@ -107,8 +134,13 @@ def carregar_credenciais(
 
 def salvar_token(credenciais, token: Path | None = None) -> None:
     token = token or caminho_do_token()
-    token.parent.mkdir(parents=True, exist_ok=True)
-    token.write_text(credenciais.to_json(), encoding="utf-8")
+    try:
+        token.parent.mkdir(parents=True, exist_ok=True)
+        token.write_text(credenciais.to_json(), encoding="utf-8")
+    except OSError as erro:
+        raise FalhaNaAutorizacao(
+            f"não foi possível salvar a autorização em {token}: {erro.strerror}"
+        ) from erro
 
 
 def conectar(
@@ -116,11 +148,15 @@ def conectar(
     token: Path | None = None,
     autorizar: Callable = _autorizar_no_navegador,
     carregar: Callable = carregar_credenciais,
+    ha_internet: Callable[[], bool] | None = None,
 ):
     """Usa a autorização salva ou pede uma nova no navegador.
 
-    autorizar e carregar existem para os testes trocarem o Google por dublês.
+    autorizar, carregar e ha_internet existem para os testes trocarem o Google
+    por dublês.
     """
+    from transcritor.rede import SEM_RESPOSTA
+
     token = token or caminho_do_token()
     credenciais = carregar(token)
     if credenciais is not None:
@@ -132,6 +168,10 @@ def conectar(
             f"falta o arquivo de credenciais do programa em {client_secret}. "
             "Veja como criá-lo em docs/google-drive.md."
         )
+    # Sem internet, o navegador abriria uma página de erro, e o programa ficaria
+    # esperando por um login impossível.
+    if not (ha_internet or _ha_internet)():
+        raise FalhaNaAutorizacao(SEM_RESPOSTA)
     try:
         credenciais = autorizar(client_secret)
     except ValueError as erro:
@@ -162,18 +202,24 @@ def servico_do_drive(credenciais):
 
 def conta_conectada(credenciais) -> str:
     """O e-mail da conta autorizada, para a pessoa confirmar que é a certa."""
-    from googleapiclient.errors import HttpError
+    from transcritor.pastas import AutorizacaoExpirada, FalhaNoDrive, traduzir
 
     try:
         sobre = servico_do_drive(credenciais).about().get(fields="user(emailAddress)").execute()
-    # HttpError: a API do Drive desativada no projeto, por exemplo. OSError: sem internet.
-    except (HttpError, OSError) as erro:
-        raise FalhaNaAutorizacao(f"o Google Drive não respondeu: {erro}") from erro
+    except Exception as erro:
+        traduzido = traduzir(erro)
+        if isinstance(traduzido, AutorizacaoExpirada):
+            desconectar()
+            raise FalhaNaAutorizacao(f"{traduzido}. Conecte de novo") from erro
+        if isinstance(traduzido, FalhaNoDrive):
+            raise FalhaNaAutorizacao(str(traduzido)) from erro
+        raise
     return sobre["user"]["emailAddress"]
 
 
 def main(argv=None) -> int:
-    sys.stdout.reconfigure(encoding="utf-8")
+    for fluxo in (sys.stdout, sys.stderr):
+        fluxo.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(
         prog="transcritor-drive", description="Conecta o transcritor ao seu Google Drive."
     )
@@ -250,6 +296,10 @@ def _comando_de_pastas(argumentos) -> int:
             escolhida = pastas.escolher_pasta(servico, destino.finalidade, em_uso)
         # "audio" -> o campo pasta_audio das preferências
         preferencias.salvar(replace(salvas, **{f"pasta_{tipo}": escolhida.nome}))
+    except pastas.AutorizacaoExpirada as erro:
+        desconectar()
+        print(f"transcritor-drive: erro: {erro}. {COMO_RECONECTAR}", file=sys.stderr)
+        return 1
     except (FalhaNaAutorizacao, pastas.FalhaNoDrive, ValueError) as erro:
         print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
         return 1
@@ -286,6 +336,7 @@ def mostrar_repeticao(tentativa: int, espera: float) -> None:
 def _comando_enviar(arquivos: list[Path]) -> int:
     from transcritor import preferencias
     from transcritor.entrega import descrever, entregar
+    from transcritor.pastas import AutorizacaoExpirada
 
     falhou = False
     try:
@@ -297,6 +348,9 @@ def _comando_enviar(arquivos: list[Path]) -> int:
                 falhou = True
             else:
                 print(descrever(entrega))
+    except AutorizacaoExpirada as erro:
+        print(f"transcritor-drive: erro: {erro}. {COMO_RECONECTAR}", file=sys.stderr)
+        return 1
     except FalhaNaAutorizacao as erro:
         print(f"transcritor-drive: erro: {erro}", file=sys.stderr)
         return 1

@@ -14,6 +14,14 @@ testes passam um dublê no lugar dele.
 from collections.abc import Callable
 from typing import NamedTuple
 
+from transcritor.rede import (
+    AUTORIZACAO_EXPIRADA,
+    SEM_RESPOSTA,
+    autorizacao_expirou,
+    erros_de_conexao,
+    motivo_do_drive,
+)
+
 TIPO_PASTA = "application/vnd.google-apps.folder"
 
 
@@ -40,6 +48,10 @@ class FalhaNoDrive(RuntimeError):
     """O Google Drive recusou o pedido ou não respondeu."""
 
 
+class AutorizacaoExpirada(FalhaNoDrive):
+    """A autorização deixou de valer no meio do caminho: é preciso entrar de novo."""
+
+
 def texto_na_busca(texto: str) -> str:
     # Na linguagem de busca do Drive, o texto vai entre aspas simples. Barra
     # invertida e aspas dentro dele precisam de escape: "Aula d'água" é um nome válido.
@@ -47,13 +59,28 @@ def texto_na_busca(texto: str) -> str:
 
 
 def _executar(pedido):
-    from googleapiclient.errors import HttpError
-
     try:
         return pedido.execute()
-    # HttpError: o Drive recusou (cota, autorização). OSError: sem internet.
-    except (HttpError, OSError) as erro:
-        raise FalhaNoDrive(f"o Google Drive não respondeu: {erro}") from erro
+    except Exception as erro:
+        raise traduzir(erro) from erro
+
+
+def traduzir(erro: Exception) -> Exception:
+    """O erro das bibliotecas do Google em uma FalhaNoDrive com texto para a pessoa.
+
+    Um erro que não vem do Google nem da rede é defeito do programa e volta como está.
+    """
+    from google.auth.exceptions import GoogleAuthError
+    from googleapiclient.errors import HttpError
+
+    if autorizacao_expirou(erro):
+        return AutorizacaoExpirada(AUTORIZACAO_EXPIRADA)
+    if isinstance(erro, HttpError):
+        detalhe = f"{erro.resp.status} {motivo_do_drive(erro)}".strip()
+        return FalhaNoDrive(f"o Google Drive recusou o pedido ({detalhe})")
+    if isinstance(erro, (GoogleAuthError, *erros_de_conexao())):
+        return FalhaNoDrive(SEM_RESPOSTA)
+    return erro
 
 
 def _buscar(servico, filtro: str) -> list[Pasta]:

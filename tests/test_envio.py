@@ -10,11 +10,13 @@ import re
 from types import SimpleNamespace
 
 import pytest
+from google.auth.exceptions import RefreshError
 from httplib2 import Response
 from httplib2.error import ServerNotFoundError
 
-from transcritor import drive, envio, preferencias
+from transcritor import drive, entrega, envio, pastas, preferencias
 from transcritor.envio import TAMANHO_DO_BLOCO, TENTATIVAS, FalhaNoEnvio, enviar_arquivo
+from transcritor.pastas import AutorizacaoExpirada
 
 
 def erro_http(codigo, motivo=""):
@@ -226,6 +228,43 @@ def test_falha_definitiva_nao_e_repetida(enviar, falha, mensagem):
     assert enviar.esperas == []
 
 
+@pytest.mark.parametrize("etapa", ["busca", "abertura", "bloco"])
+def test_autorizacao_expirada_em_qualquer_etapa_para_na_hora(enviar, etapa):
+    servidor = ServidorFalso(**{etapa: [RefreshError("invalid_grant")]})
+
+    with pytest.raises(AutorizacaoExpirada, match="expirou"):
+        enviar(servidor)
+    assert enviar.esperas == []
+
+
+def test_renovacao_com_o_google_fora_do_ar_e_repetida(enviar, arquivo):
+    servidor = ServidorFalso(bloco=[None, RefreshError("500", retryable=True)])
+
+    enviar(servidor)
+
+    assert servidor.recebido == arquivo.read_bytes()
+
+
+def test_entrega_com_autorizacao_expirada_esquece_o_token_e_para(arquivo, monkeypatch):
+    salvo = drive.caminho_do_token()
+    salvo.parent.mkdir(parents=True, exist_ok=True)
+    salvo.write_text("{}", encoding="utf-8")
+    tentados = []
+
+    def expirar(servico, arquivo, *_):
+        tentados.append(arquivo)
+        raise AutorizacaoExpirada("a autorização expirou")
+
+    monkeypatch.setattr(pastas, "obter_ou_criar", lambda _s, nome: pastas.Pasta(nome, nome))
+    monkeypatch.setattr(envio, "enviar_arquivo", expirar)
+
+    with pytest.raises(AutorizacaoExpirada):
+        list(entrega.entregar("serviço", [arquivo, arquivo], {"audio": "A", "pdf": "B"}))
+
+    assert len(tentados) == 1
+    assert not salvo.exists()
+
+
 def test_arquivo_igual_ja_no_drive_nao_e_enviado_de_novo(enviar, arquivo):
     soma = hashlib.md5(arquivo.read_bytes()).hexdigest()
     servidor = ServidorFalso([{"id": "velho", "name": "aula.mp3", "md5Checksum": soma}])
@@ -274,8 +313,6 @@ def test_arquivo_vazio_ou_inexistente_nem_chega_a_rede(enviar, tmp_path):
 @pytest.fixture
 def comando(monkeypatch):
     """Troca o Drive por dublês e anota para qual pasta foi cada arquivo."""
-    from transcritor import pastas
-
     enviados = []
 
     def enviar(servico, arquivo, pasta_id, *_):

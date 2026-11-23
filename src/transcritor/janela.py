@@ -18,10 +18,12 @@ from transcritor.audio import AudioInvalido, conferir_audio
 # Os textos de andamento são os mesmos do terminal.
 from transcritor.cli import descrever_modelo, formatar_progresso
 from transcritor.entrega import entregar
+from transcritor.pastas import AutorizacaoExpirada
 from transcritor.pdf import Cabecalho
 from transcritor.transcricao import (
     FalhaNaTranscricao,
     Segmento,
+    avisos_da_transcricao,
     carregar_modelo,
     formatar_tempo,
     transcrever,
@@ -83,6 +85,8 @@ class Resultado:
     sucesso: bool
     texto: str
     pdf: Path | None = None
+    # O PDF existe, mas algum arquivo não chegou ao Drive: dá para tentar de novo.
+    falta_enviar: bool = False
 
 
 class _Cancelada(Exception):
@@ -173,15 +177,43 @@ def executar(
                                 f"{erro.strerror}. Se ele estiver aberto em outro "
                                 "programa, feche-o e transcreva de novo."))
         return
-    pronto = f"Pronto! PDF salvo em: {pdf}"
+    avisos = avisos_da_transcricao(transcricao, pedido.duracao)
+    pronto = " ".join([*avisos, f"Pronto! PDF salvo em: {pdf}"])
+    if pedido.pastas is None:
+        avisar(Resultado(True, pronto, pdf))
+        return
     if servico is not None:
         falha_no_drive = enviar_ao_drive(servico, pedido, pdf, avisar, cancelamento)
-    if falha_no_drive is not None:
-        avisar(Resultado(False, f"{pronto}. Envio ao Drive incompleto: {falha_no_drive}", pdf))
-    elif servico is not None:
-        avisar(Resultado(True, f"{pronto}. O áudio e o PDF estão no seu Drive.", pdf))
+    avisar(_resultado_do_envio(pronto, pdf, falha_no_drive))
+
+
+def reenviar(
+    pedido: Pedido,
+    pdf: Path,
+    avisar: Callable[[Andamento | Resultado], None],
+    cancelamento: threading.Event,
+) -> None:
+    """Tenta só o envio outra vez, sem transcrever de novo. Roda fora da thread da janela.
+
+    O que já chegou ao Drive não é mandado outra vez: o envio reconhece o arquivo.
+    """
+    avisar(Andamento(TEXTO_CONECTANDO))
+    try:
+        servico = conectar_ao_drive()
+    except drive.FalhaNaAutorizacao as erro:
+        falha = str(erro)
+    except Exception as erro:
+        falha = f"erro inesperado: {erro}"
     else:
-        avisar(Resultado(True, pronto, pdf))
+        falha = enviar_ao_drive(servico, pedido, pdf, avisar, cancelamento)
+    avisar(_resultado_do_envio(f"PDF salvo em: {pdf}", pdf, falha))
+
+
+def _resultado_do_envio(pronto: str, pdf: Path, falha: str | None) -> Resultado:
+    if falha is None:
+        return Resultado(True, f"{pronto}. O áudio e o PDF estão no seu Drive.", pdf)
+    texto = f"{pronto}. Envio ao Drive incompleto: {falha.rstrip('.')}."
+    return Resultado(False, texto, pdf, falta_enviar=True)
 
 
 def enviar_ao_drive(
@@ -214,10 +246,12 @@ def enviar_ao_drive(
         )
         erros = [entrega.erro for entrega in entregas if entrega.erro]
     except _Cancelada:
-        return "o envio foi cancelado."
+        return "o envio foi cancelado"
+    except AutorizacaoExpirada as erro:
+        return f"{erro}. Clique em Enviar de novo para entrar na sua conta"
     except Exception as erro:
         return f"erro inesperado: {erro}"
-    return " ".join(f"{erro}." for erro in erros) or None
+    return "; ".join(erros) or None
 
 
 def _com_parcial(texto: str, parcial: Path | None) -> str:
@@ -246,6 +280,9 @@ class Janela:
         self.cancelamento = threading.Event()
         self.barra_em_vaivem = False
         self.pdf: Path | None = None
+        # O último pedido, para o botão Enviar de novo.
+        self.pedido: Pedido | None = None
+        self.falta_enviar = False
 
         self.preferencias = preferencias.carregar()
 
@@ -302,6 +339,10 @@ class Janela:
             botoes, text="Abrir PDF", command=self.abrir_pdf, state="disabled"
         )
         self.botao_abrir.grid(row=0, column=2, padx=4)
+        self.botao_reenviar = ttk.Button(
+            botoes, text="Enviar de novo", command=self.reenviar, state="disabled"
+        )
+        self.botao_reenviar.grid(row=0, column=3, padx=4)
 
         self.barra = ttk.Progressbar(quadro, maximum=100)
         self.barra.grid(row=5, column=0, columnspan=3, sticky="ew", pady=4)
@@ -358,14 +399,30 @@ class Janela:
         duracao = "" if pedido.duracao is None else f" de {formatar_tempo(pedido.duracao)}"
         self.situacao.set(f"Áudio{duracao}. Preparando...")
         self.pdf = None
+        self.pedido = pedido
+        self._trabalhar(executar, pedido)
+
+    def reenviar(self) -> None:
+        """Manda para o Drive o que faltou da última transcrição."""
+        if self.transcrevendo or not self.falta_enviar:
+            return
+        # As pastas podem ter sido trocadas na janela depois da falha.
+        escolhas = self._escolhas()
+        self._lembrar(escolhas)
+        self.pedido = replace(self.pedido, pastas=escolhas.nomes_das_pastas())
+        self._trabalhar(reenviar, self.pedido, self.pdf)
+
+    def _trabalhar(self, tarefa: Callable, *argumentos) -> None:
+        """Roda a tarefa em outra thread e passa a ler as mensagens dela."""
+        self.falta_enviar = False
         self._travar(True)
         self._definir_barra(None)
-        # Um por transcrição: o pedido de cancelar uma não pode valer para a seguinte.
+        # Um por tarefa: o pedido de cancelar uma não pode valer para a seguinte.
         self.cancelamento = threading.Event()
         # Em outra thread porque a transcrição leva minutos: na thread da janela,
         # ela pararia de responder. daemon=True não segura o programa ao fechar.
         self.thread = threading.Thread(
-            target=executar, args=(pedido, self.fila.put, self.cancelamento), daemon=True
+            target=tarefa, args=(*argumentos, self.fila.put, self.cancelamento), daemon=True
         )
         self.thread.start()
         self.raiz.after(INTERVALO_DA_FILA_MS, self.ler_fila)
@@ -430,6 +487,8 @@ class Janela:
         self.botao_escolher.configure(state=livre)
         self.botao_cancelar.configure(state="normal" if trabalhando else "disabled")
         self.botao_abrir.configure(state="normal" if self.pdf else "disabled")
+        pode_reenviar = self.falta_enviar and not trabalhando
+        self.botao_reenviar.configure(state="normal" if pode_reenviar else "disabled")
         self.caixa_enviar.configure(state=livre)
         if trabalhando:
             for campo in self.campos_das_pastas:
@@ -440,6 +499,7 @@ class Janela:
     def _terminar(self, resultado: Resultado) -> None:
         self.thread = None
         self.pdf = resultado.pdf
+        self.falta_enviar = resultado.falta_enviar
         self.situacao.set(resultado.texto)
         # Com o PDF pronto, a barra fica cheia mesmo que o envio tenha falhado.
         self._definir_barra(100 if resultado.sucesso or resultado.pdf else 0)

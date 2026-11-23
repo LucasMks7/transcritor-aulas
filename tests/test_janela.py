@@ -27,7 +27,9 @@ from transcritor.janela import (
     Resultado,
     executar,
     preparar_pedido,
+    reenviar,
 )
+from transcritor.pastas import AutorizacaoExpirada
 from transcritor.transcricao import FalhaNaTranscricao, ModeloCarregado
 
 
@@ -310,6 +312,59 @@ def test_falha_no_envio_de_um_arquivo_aparece_no_resultado(
     assert "não há espaço livre" in avisos[-1].texto
 
 
+def test_autorizacao_expirada_no_envio_orienta_a_entrar_de_novo(
+    audio, modelo_que_funciona, drive_falso, monkeypatch
+):
+    def expirar(*_):
+        raise AutorizacaoExpirada("a autorização do Google expirou")
+
+    monkeypatch.setattr(modulo, "entregar", expirar)
+    avisos = []
+
+    executar(Pedido(audio, 1.0, PASTAS), avisos.append, threading.Event())
+
+    assert "Clique em Enviar de novo" in avisos[-1].texto
+    assert avisos[-1].falta_enviar
+
+
+def test_reenviar_manda_os_arquivos_sem_transcrever(audio, drive_falso, monkeypatch):
+    monkeypatch.setattr(modulo, "carregar_modelo", pytest.fail)
+    pdf = audio.with_suffix(".pdf")
+    avisos = []
+
+    reenviar(Pedido(audio, 1.0, PASTAS), pdf, avisos.append, threading.Event())
+
+    assert drive_falso.enviados == [("aula.pdf", "Resumos"), ("aula.mp3", "Física")]
+    assert avisos[-1] == Resultado(
+        True, f"PDF salvo em: {pdf}. O áudio e o PDF estão no seu Drive.", pdf
+    )
+
+
+@pytest.mark.parametrize(
+    "erro", [FalhaNaAutorizacao("o Google Drive não respondeu"), ValueError("imprevisto")]
+)
+def test_reenviar_sem_conexao_continua_podendo_tentar(audio, drive_falso, monkeypatch, erro):
+    def falhar():
+        raise erro
+
+    monkeypatch.setattr(modulo, "conectar_ao_drive", falhar)
+    avisos = []
+
+    reenviar(Pedido(audio, 1.0, PASTAS), audio, avisos.append, threading.Event())
+
+    assert avisos[-1].falta_enviar
+    assert str(erro) in avisos[-1].texto
+
+
+def test_audio_incompleto_avisa_junto_com_o_resultado(audio, modelo_que_funciona):
+    avisos = []
+
+    executar(Pedido(audio, 60.0), avisos.append, threading.Event())
+
+    assert avisos[-1].sucesso
+    assert "o arquivo diz ter 01:00, mas só 00:01 puderam ser lidos" in avisos[-1].texto
+
+
 def test_cancelar_durante_o_envio_mantem_o_pdf(audio, modelo_que_funciona, drive_falso):
     cancelamento = threading.Event()
     avisos = []
@@ -496,6 +551,33 @@ def test_transcrever_lembra_das_escolhas(janela, audio, modelo_que_funciona, dri
     assert preferencias.carregar() == preferencias.Preferencias(
         True, "Física I", "Transcritor - PDFs", str(audio.resolve().parent)
     )
+
+
+def test_enviar_de_novo_so_fica_disponivel_depois_de_uma_falha(
+    janela, audio, modelo_que_funciona, drive_falso
+):
+    drive_falso.erros[".mp3"] = "a conexão falhou"
+    janela.audio.set(str(audio))
+    janela.caixa_enviar.invoke()
+    assert estado(janela.botao_reenviar) == "disabled"
+
+    janela.iniciar()
+    assert estado(janela.botao_reenviar) == "disabled"
+    esperar_o_fim(janela)
+
+    assert estado(janela.botao_reenviar) == "normal"
+    assert estado(janela.botao_abrir) == "normal"
+
+    # A pessoa troca a pasta, a internet volta, e só o envio é refeito.
+    drive_falso.erros.clear()
+    drive_falso.enviados.clear()
+    janela.pasta_audio.set("Outra")
+    janela.reenviar()
+    esperar_o_fim(janela)
+
+    assert drive_falso.enviados == [("aula.pdf", "Transcritor - PDFs"), ("aula.mp3", "Outra")]
+    assert estado(janela.botao_reenviar) == "disabled"
+    assert estado(janela.botao_abrir) == "normal"
 
 
 def test_a_janela_abre_com_o_que_foi_lembrado(tk_da_sessao, monkeypatch, tmp_path):

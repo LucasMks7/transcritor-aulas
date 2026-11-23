@@ -9,7 +9,7 @@ from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 from typing import NamedTuple
 
-from transcritor import envio, pastas
+from transcritor import drive, envio, pastas
 
 
 class Entrega(NamedTuple):
@@ -34,7 +34,11 @@ def entregar(
     ao_repetir: Callable[[int, float], None] = lambda tentativa, espera: None,
     esperar: Callable[[float], object] = time.sleep,
 ) -> Iterator[Entrega]:
-    """Envia um arquivo por vez; a falha de um não impede o envio dos outros."""
+    """Envia um arquivo por vez; a falha de um não impede o envio dos outros.
+
+    Se a autorização expirar, para e levanta AutorizacaoExpirada: nenhum outro
+    arquivo chegaria.
+    """
     destinos: dict[str, pastas.Pasta] = {}
     for arquivo in arquivos:
         tipo = tipo_do_arquivo(arquivo)
@@ -51,6 +55,11 @@ def entregar(
                 ao_repetir,
                 esperar,
             )
+        except pastas.AutorizacaoExpirada:
+            # Sem isto, a próxima tentativa usaria a mesma autorização inválida, em
+            # vez de pedir o login.
+            drive.desconectar()
+            raise
         except pastas.FalhaNoDrive as erro:
             yield Entrega(arquivo, nome, erro=str(erro))
         else:

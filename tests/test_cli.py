@@ -1,13 +1,24 @@
 import os
 import subprocess
 import sys
+import wave
 
+import av
 import pytest
 
-from transcritor import __version__, arquivos, cli, drive, entrega, preferencias
+from transcritor import (
+    __version__,
+    arquivos,
+    cli,
+    drive,
+    entrega,
+    preferencias,
+    transcricao,
+)
 from transcritor.arquivos import caminho_parcial
 from transcritor.cli import formatar_progresso, formatar_tempo, main
 from transcritor.envio import ArquivoNoDrive
+from transcritor.pastas import AutorizacaoExpirada
 from transcritor.transcricao import FalhaNaTranscricao, ModeloCarregado
 
 
@@ -438,3 +449,67 @@ def test_cancelar_o_envio_mantem_a_transcricao(
 
     assert "A transcrição está salva no PC" in capsys.readouterr().err
     assert audio.with_suffix(".pdf").is_file()
+
+
+def test_autorizacao_expirada_no_envio_ensina_a_tentar_de_novo(
+    capsys, audio, modelos_pedidos, entregas, monkeypatch
+):
+    def expirar(*_):
+        raise AutorizacaoExpirada("a autorização do Google expirou")
+
+    monkeypatch.setattr(entrega, "entregar", expirar)
+
+    assert main([str(audio), "--enviar"]) == 1
+
+    erro = capsys.readouterr().err
+    assert "a autorização do Google expirou" in erro
+    assert "transcritor-drive enviar" in erro
+
+
+def test_audio_sem_som_vira_erro_claro_e_nao_um_pdf_em_branco(capsys, tmp_path, modelos_pedidos):
+    vazio = tmp_path / "vazio.wav"
+    with wave.open(str(vazio), "wb") as arquivo:
+        arquivo.setnchannels(1)
+        arquivo.setsampwidth(2)
+        arquivo.setframerate(16_000)
+
+    assert main([str(vazio)]) == 1
+
+    assert "não tem nenhum som" in capsys.readouterr().err
+    assert [p.name for p in tmp_path.iterdir()] == ["vazio.wav"]
+
+
+def test_audio_que_quebra_ao_ser_lido_vira_erro_claro(
+    capsys, audio, modelos_pedidos, monkeypatch
+):
+    def quebrar(caminho):
+        raise av.error.InvalidDataError(1, "Invalid data found when processing input")
+
+    monkeypatch.setattr(transcricao, "ler_amostras", quebrar)
+
+    assert main([str(audio)]) == 1
+
+    assert "danificado" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("nome", ["aula.mp3", "aula.flac"])
+def test_audio_cortado_na_metade_avisa_que_esta_incompleto(
+    capsys, criar_audio, modelos_pedidos, nome
+):
+    # Como um download interrompido: o cabeçalho ainda declara a duração inteira.
+    cortado = criar_audio(nome, segundos=4.0)
+    cortado.write_bytes(cortado.read_bytes()[: cortado.stat().st_size // 2])
+
+    assert main([str(cortado)]) == 0
+
+    assert "o arquivo diz ter 00:04, mas só" in capsys.readouterr().err
+
+
+def test_audio_sem_fala_avisa(capsys, audio, monkeypatch, criar_modelo):
+    monkeypatch.setattr(
+        cli, "carregar_modelo", lambda *_: ModeloCarregado(criar_modelo(), "small", "cpu")
+    )
+
+    assert main([str(audio)]) == 0
+
+    assert "nenhuma fala foi encontrada" in capsys.readouterr().err

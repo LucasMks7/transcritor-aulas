@@ -1,9 +1,11 @@
 """Autorização do Drive com dublês no lugar do Google: nada sai do PC."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
-from google.auth.exceptions import RefreshError
+from google.auth.exceptions import RefreshError, TransportError
+from httplib2.error import ServerNotFoundError
 
 from transcritor import drive
 from transcritor.drive import (
@@ -134,7 +136,7 @@ def test_conectar_sem_token_pede_autorizacao_e_salva(token, client_secret):
         pedidos.append(caminho)
         return CredenciaisFalsas()
 
-    conectar(client_secret, token, autorizar=autorizar)
+    conectar(client_secret, token, autorizar=autorizar, ha_internet=lambda: True)
 
     assert pedidos == [client_secret]
     assert json.loads(token.read_text(encoding="utf-8"))["refresh_token"] == "renovacao"
@@ -150,7 +152,7 @@ def test_client_secret_invalido_vira_mensagem_clara(token, client_secret):
         raise ValueError("Client secrets must be for a web or installed app.")
 
     with pytest.raises(FalhaNaAutorizacao, match="não é válido"):
-        conectar(client_secret, token, autorizar=autorizar)
+        conectar(client_secret, token, autorizar=autorizar, ha_internet=lambda: True)
     assert not token.exists()
 
 
@@ -159,7 +161,7 @@ def test_autorizacao_negada_vira_mensagem_clara(token, client_secret):
         raise RuntimeError("access_denied")
 
     with pytest.raises(FalhaNaAutorizacao, match="não foi concluída: access_denied"):
-        conectar(client_secret, token, autorizar=autorizar)
+        conectar(client_secret, token, autorizar=autorizar, ha_internet=lambda: True)
     assert not token.exists()
 
 
@@ -170,6 +172,72 @@ def test_desconectar_apaga_o_token(token):
     assert desconectar(token) is True
     assert not token.exists()
     assert desconectar(token) is False
+
+
+@pytest.mark.parametrize(
+    "falha",
+    [
+        TransportError("sem internet"),
+        ConnectionResetError("caiu"),
+        RefreshError("o servidor do Google caiu", retryable=True),
+    ],
+    ids=["sem-internet", "queda", "google-fora-do-ar"],
+)
+def test_sem_internet_na_renovacao_o_token_e_mantido(token, falha):
+    token.parent.mkdir()
+    token.write_text("{}", encoding="utf-8")
+
+    def renovar(credenciais):
+        raise falha
+
+    with pytest.raises(FalhaNaAutorizacao, match="não respondeu"):
+        carregar_credenciais(
+            token, ler=lambda caminho: CredenciaisFalsas(valid=False), renovar=renovar
+        )
+    assert token.exists()
+
+
+def test_sem_internet_o_navegador_nem_abre(token, client_secret):
+    with pytest.raises(FalhaNaAutorizacao, match="Confira a conexão"):
+        conectar(client_secret, token, autorizar=pytest.fail, ha_internet=lambda: False)
+
+
+def test_token_que_nao_pode_ser_salvo_vira_mensagem_clara(tmp_path):
+    ocupado = tmp_path / "arquivo-no-lugar-da-pasta"
+    ocupado.write_text("", encoding="utf-8")
+
+    with pytest.raises(FalhaNaAutorizacao, match="não foi possível salvar a autorização"):
+        drive.salvar_token(CredenciaisFalsas(), ocupado / "token.json")
+
+
+def servico_que_falha(erro):
+    def falhar(**_):
+        raise erro
+
+    return SimpleNamespace(about=lambda: SimpleNamespace(get=falhar))
+
+
+@pytest.mark.parametrize("erro", [ServerNotFoundError("dns"), TransportError("rede")])
+def test_conta_sem_internet_vira_mensagem_clara(monkeypatch, erro):
+    monkeypatch.setattr(drive, "servico_do_drive", lambda credenciais: servico_que_falha(erro))
+
+    with pytest.raises(FalhaNaAutorizacao, match="Confira a conexão"):
+        drive.conta_conectada("credenciais")
+
+
+def test_conta_com_autorizacao_revogada_esquece_o_token(monkeypatch):
+    salvo = drive.caminho_do_token()
+    salvo.parent.mkdir(parents=True, exist_ok=True)
+    salvo.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        drive,
+        "servico_do_drive",
+        lambda credenciais: servico_que_falha(RefreshError("invalid_grant")),
+    )
+
+    with pytest.raises(FalhaNaAutorizacao, match="expirou ou foi revogada. Conecte de novo"):
+        drive.conta_conectada("credenciais")
+    assert not salvo.exists()
 
 
 def test_comando_conectar_mostra_a_conta(monkeypatch, capsys):

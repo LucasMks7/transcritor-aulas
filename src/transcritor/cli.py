@@ -15,6 +15,7 @@ from transcritor.arquivos import (
     gravar_pdf,
 )
 from transcritor.audio import AudioInvalido, conferir_audio
+from transcritor.pastas import AutorizacaoExpirada
 from transcritor.pdf import Cabecalho
 from transcritor.transcricao import (
     DISPOSITIVO_PADRAO,
@@ -24,6 +25,7 @@ from transcritor.transcricao import (
     FalhaNaTranscricao,
     ModeloCarregado,
     Segmento,
+    avisos_da_transcricao,
     carregar_modelo,
     formatar_tempo,
     transcrever,
@@ -211,6 +213,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     limpar_progresso()
     texto.concluir()
     print(f"Transcrição salva em: {saida}")
+    for aviso in avisos_da_transcricao(transcricao, duracao):
+        print(aviso, file=sys.stderr)
 
     pdf = saida.with_suffix(".pdf")
     cabecalho = Cabecalho(audio.stem, transcricao.duracao, carregado.nome, date.today())
@@ -244,6 +248,9 @@ def enviar(servico, pdf: Path, audio: Path) -> int:
                 codigo = CODIGO_FALHA_NO_ENVIO
             else:
                 print(entrega.descrever(entregue))
+    except AutorizacaoExpirada as erro:
+        print(f"transcrever: erro: {erro}.", file=sys.stderr)
+        codigo = CODIGO_FALHA_NO_ENVIO
     except KeyboardInterrupt:
         print("\nEnvio cancelado.", file=sys.stderr)
         codigo = CODIGO_CANCELADO

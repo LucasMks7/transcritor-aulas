@@ -16,8 +16,14 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import NamedTuple
 
-from transcritor.pastas import FalhaNoDrive, texto_na_busca
-from transcritor.rede import erros_de_conexao, motivo_do_drive, vale_repetir
+from transcritor.pastas import AutorizacaoExpirada, FalhaNoDrive, texto_na_busca
+from transcritor.rede import (
+    AUTORIZACAO_EXPIRADA,
+    autorizacao_expirou,
+    erros_de_conexao,
+    motivo_do_drive,
+    vale_repetir,
+)
 
 # O Drive exige múltiplos de 256 KB. Blocos pequenos mostram o progresso e
 # obedecem ao cancelamento mais depressa; blocos grandes fazem menos pedidos.
@@ -164,9 +170,12 @@ def _sessao_expirou(erro: Exception, pedido) -> bool:
     return comecou and isinstance(erro, HttpError) and erro.resp.status in (404, 410)
 
 
-def _traduzir(erro: Exception, arquivo: Path) -> FalhaNoEnvio:
+def _traduzir(erro: Exception, arquivo: Path) -> FalhaNoDrive:
     from googleapiclient.errors import HttpError
 
+    if autorizacao_expirou(erro):
+        # Não é só deste arquivo: nenhum outro chegaria.
+        return AutorizacaoExpirada(AUTORIZACAO_EXPIRADA)
     if isinstance(erro, HttpError):
         motivo = motivo_do_drive(erro)
         if motivo == "storageQuotaExceeded":

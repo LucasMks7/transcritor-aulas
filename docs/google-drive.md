@@ -59,4 +59,13 @@ Para revogar o acesso também no Google, use [myaccount.google.com/permissions](
 
 ## Quando a autorização deixa de valer
 
-O programa renova o acesso sozinho. Se a pessoa revogar a autorização ou se ela vencer, o token salvo é apagado, e o próximo `conectar` pede a autorização de novo no navegador.
+O programa renova o acesso sozinho. Se a pessoa revogar a autorização ou se ela vencer, o token salvo é apagado, e o próximo uso pede a autorização de novo no navegador.
+
+| Situação | O que o programa faz |
+| --- | --- |
+| Autorização vencida ou revogada, mesmo no meio de um envio | Apaga o token e orienta a entrar de novo |
+| Sem internet, ou servidor do Google fora do ar | Mantém o token: a autorização continua boa |
+| Sem internet e sem token | Avisa na hora, em vez de abrir uma página de erro no navegador |
+| A pessoa fecha o navegador sem autorizar | Desiste depois de 5 minutos |
+
+Sem internet, as bibliotecas do Google levantam erros que não são `OSError` (`ServerNotFoundError` e `TransportError`). Por isso a lista do que é falha de conexão fica em um lugar só, em `rede.py`.

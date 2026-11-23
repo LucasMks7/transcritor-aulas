@@ -46,13 +46,13 @@ Basta escolher o áudio e clicar em **Transcrever**. A janela mostra quanto do �
 
 **Cancelar** para a transcrição no próximo trecho, e o que já estava pronto fica no arquivo `.parcial`. Enquanto o modelo é baixado, na primeira vez, o cancelamento só acontece quando o download termina.
 
-Com **Enviar o áudio e o PDF para o meu Google Drive** marcado, os dois arquivos vão para as pastas escolhidas depois que o PDF fica pronto. A conexão com o Drive é feita antes da transcrição, com a pessoa ainda na frente do PC; se ela falhar, a aula é transcrita mesmo assim.
+Com **Enviar o áudio e o PDF para o meu Google Drive** marcado, os dois arquivos vão para as pastas escolhidas depois que o PDF fica pronto. A conexão com o Drive é feita antes da transcrição, com a pessoa ainda na frente do PC; se ela falhar, a aula é transcrita mesmo assim. Se algo não chegar ao Drive, **Enviar de novo** repete só o envio, sem transcrever outra vez.
 
 A janela e o terminal usam o mesmo código para conferir o áudio, transcrever e gravar os arquivos. A transcrição roda em outra thread, para a janela continuar respondendo, e manda o andamento para ela por uma fila, porque o Tkinter só aceita ser usado pela thread que o criou.
 
 ### Google Drive e preferências
 
-O envio é opcional e vem desligado. O programa só enxerga no Drive o que ele mesmo criou, retoma um envio interrompido de onde parou e não cria cópias de um arquivo que já está lá. Como configurar e como funciona: [docs/google-drive.md](docs/google-drive.md).
+O envio é opcional e vem desligado. O programa só enxerga no Drive o que ele mesmo criou, retoma um envio interrompido de onde parou e não cria cópias de um arquivo que já está lá. Como configurar e como funciona: [docs/google-drive.md](docs/google-drive.md). O que sai do PC e o que não sai: [docs/privacidade.md](docs/privacidade.md).
 
 A janela lembra se o envio está ligado, os nomes das pastas do Drive e a pasta do último áudio. As preferências ficam em `%APPDATA%\transcritor-aulas\preferencias.json`; um arquivo estragado volta para o padrão. No terminal, o envio só acontece com `--enviar`, mesmo que esteja ligado na janela.
 
@@ -78,7 +78,7 @@ Basta ter o driver da NVIDIA atualizado; não é preciso instalar o CUDA Toolkit
 
 O comando confere o conteúdo do arquivo, não a extensão. Ele lê os formatos comuns de áudio, como MP3, M4A (gravador do celular), OGG/Opus (áudio do WhatsApp), WAV e FLAC, e também vídeos com som, como a gravação de uma aula em MP4. Não é preciso instalar o ffmpeg: a biblioteca que lê o áudio já o traz embutido.
 
-Um arquivo que não é áudio, ou um vídeo sem som, é recusado na hora, antes de o modelo ser carregado.
+Um arquivo que não é áudio, ou um vídeo sem som, é recusado na hora, antes de o modelo ser carregado. Um áudio cortado, como o de um download interrompido, é transcrito até onde der, com um aviso de quanto faltou: o cabeçalho ainda diz a duração inteira, e sem o aviso ninguém notaria que a transcrição parou no meio da aula. Um áudio sem nenhuma fala também é avisado.
 
 ### Aulas longas
 
