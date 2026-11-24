@@ -66,7 +66,7 @@ O PDF usa as fontes que já vêm em todo leitor de PDF, então não depende de n
 
 Com uma placa de vídeo da NVIDIA, a transcrição fica muitas vezes mais rápida, e o modelo padrão passa a ser o `large-v3-turbo`, o que menos erra. No modo `auto`, o comando testa a placa antes de começar: se ela não existir ou não funcionar, a transcrição segue no processador, e o terminal diz por quê. Com `--dispositivo cuda`, uma placa que não funciona vira erro, em vez de uma transcrição lenta sem aviso.
 
-A placa precisa de duas bibliotecas da NVIDIA, o cuBLAS e o cuDNN, que ocupam cerca de 2 GB e por isso não vêm na instalação padrão:
+A placa precisa de duas bibliotecas da NVIDIA, o cuBLAS e o cuDNN, que ocupam cerca de 2 GB e por isso não vêm na instalação padrão. Sem elas, o programa nem baixa o modelo da placa e segue no processador:
 
 ```bash
 pip install -e ".[gpu]"
@@ -99,6 +99,10 @@ O Whisper tem modelos de vários tamanhos: os maiores erram menos e demoram mais
 | `large-v3-turbo` | 1547 MB | mais de 77 min | cerca de 9 min (padrão) | 1,8% |
 
 Os tempos do `small` no processador e do `large-v3-turbo` na placa vêm de um áudio de 2 horas, transcrito em 67 e em 17 minutos. Os outros dois são projeções a partir de um áudio de 3 minutos, e numa aula inteira devem ser maiores.
+
+## Instalador
+
+Quem só vai usar o programa no Windows não precisa de Python: `python scripts/montar_instalador.py` monta um instalador de 106 MB, com atalho no menu Iniciar e sem pedir senha de administrador. Ele usa o processador; as bibliotecas da placa de vídeo não vão junto. Como montar, o que vai dentro e o que foi conferido: [docs/instalador.md](docs/instalador.md).
 
 ## Desenvolvimento
 

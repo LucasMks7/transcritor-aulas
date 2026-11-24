@@ -1,6 +1,10 @@
+import ctypes.util
+import sys
+
 import numpy as np
 import pytest
 
+from transcritor import transcricao
 from transcritor.transcricao import (
     FalhaNaTranscricao,
     Segmento,
@@ -309,3 +313,42 @@ def test_falha_ao_carregar_o_modelo_vira_mensagem_clara():
 
     with pytest.raises(FalhaNaTranscricao, match="modelo small.*sem conexão"):
         carregar_modelo("small", "cpu", criar=falhar)
+
+
+def _com_placa(monkeypatch, cublas):
+    """Um PC com uma placa da NVIDIA, com ou sem o cuBLAS."""
+    import ctranslate2
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(transcricao, "preparar_bibliotecas_cuda", lambda: None)
+    monkeypatch.setattr(ctranslate2, "get_cuda_device_count", lambda: 1)
+    monkeypatch.setattr(ctypes.util, "find_library", lambda nome: cublas)
+
+
+def test_placa_sem_as_bibliotecas_nao_baixa_o_modelo_grande(monkeypatch, criar_modelo):
+    _com_placa(monkeypatch, cublas=None)
+    criados = []
+
+    def criar(nome, dispositivo):
+        criados.append((nome, dispositivo))
+        return criar_modelo("Bom dia.")
+
+    carregado = carregar_modelo(criar=criar)
+
+    assert criados == [("small", "cpu")]
+    assert "faltam as bibliotecas da NVIDIA" in carregado.motivo_sem_gpu
+
+
+def test_placa_com_as_bibliotecas_e_usada(monkeypatch, criar_modelo):
+    _com_placa(monkeypatch, cublas="cublas64_12.dll")
+
+    carregado = carregar_modelo(criar=lambda nome, dispositivo: criar_modelo("Bom dia."))
+
+    assert (carregado.nome, carregado.dispositivo) == ("large-v3-turbo", "cuda")
+
+
+def test_placa_sem_as_bibliotecas_pedida_explicitamente_e_erro(monkeypatch):
+    _com_placa(monkeypatch, cublas=None)
+
+    with pytest.raises(FalhaNaTranscricao, match="faltam as bibliotecas"):
+        carregar_modelo(dispositivo="cuda", criar=pytest.fail)

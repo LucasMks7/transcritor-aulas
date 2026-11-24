@@ -1,0 +1,92 @@
+name: Instalador
+
+# Montar o instalador leva minutos, então só roda quando algo que entra nele muda.
+on:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "instalador/**"
+      - "scripts/montar_instalador.py"
+      - "pyproject.toml"
+      - ".github/workflows/instalador.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  montar-e-testar:
+    name: Montar, instalar e transcrever
+    runs-on: windows-latest
+    timeout-minutes: 30
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Instalar o projeto e o PyInstaller
+        run: python -m pip install -e ".[instalador]"
+
+      - name: Instalar o Inno Setup, se o runner não o trouxer
+        run: |
+          if (-not (Test-Path "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe")) {
+            choco install innosetup --yes --no-progress
+          }
+
+      # Sem o client_secret.json, que nunca vai para o GitHub. O instalador também
+      # não é publicado aqui: só se confere que ele funciona.
+      - name: Montar o instalador
+        run: python scripts/montar_instalador.py --saida "$env:RUNNER_TEMP\instalador"
+
+      - name: Instalar em silêncio
+        run: |
+          $exe = Get-ChildItem "$env:RUNNER_TEMP\instalador\*-instalador.exe"
+          $p = Start-Process $exe -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',"/DIR=$env:RUNNER_TEMP\programa" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "o instalador terminou com $($p.ExitCode)" }
+
+      - name: Recuperar o modelo do cache
+        uses: actions/cache@v6
+        with:
+          path: ~/.cache/huggingface/hub
+          key: whisper-tiny-v1
+
+      - name: Recuperar a amostra do cache
+        uses: actions/cache@v6
+        with:
+          path: amostras/alienista-cap11.mp3
+          key: amostra-${{ hashFiles('scripts/baixar_amostra.py') }}
+
+      - name: Baixar a amostra
+        run: python scripts/baixar_amostra.py
+
+      # O PATH só com o Windows: o programa não pode depender do Python do runner.
+      - name: Transcrever com o programa instalado
+        run: |
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          & "$env:RUNNER_TEMP\programa\transcrever.exe" amostras\alienista-cap11.mp3 --modelo tiny --saida "$env:RUNNER_TEMP\aula.txt"
+          if ($LASTEXITCODE -ne 0) { throw "a transcrição terminou com $LASTEXITCODE" }
+          if (-not (Test-Path "$env:RUNNER_TEMP\aula.pdf")) { throw "o PDF não foi criado" }
+
+      - name: Abrir a janela
+        run: |
+          $p = Start-Process "$env:RUNNER_TEMP\programa\Transcritor.exe" -PassThru
+          Start-Sleep -Seconds 20
+          if ($p.HasExited) { throw "a janela fechou sozinha, com $($p.ExitCode)" }
+          Stop-Process -Id $p.Id
+
+      - name: Desinstalar
+        run: |
+          Start-Process "$env:RUNNER_TEMP\programa\unins000.exe" -ArgumentList '/VERYSILENT','/SUPPRESSMSGBOXES' -Wait
+          # O desinstalador continua em uma cópia temporária por alguns segundos.
+          Start-Sleep -Seconds 15
+          if (Test-Path "$env:RUNNER_TEMP\programa\Transcritor.exe") { throw "sobrou o programa" }

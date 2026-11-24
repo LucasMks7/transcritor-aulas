@@ -26,7 +26,7 @@ Os dados da conta do Google não são guardados fora do computador, vendidos, co
 
 ## Como apagar
 
-- `transcritor-drive desconectar` apaga a autorização deste computador.
+- `transcritor-drive desconectar` apaga a autorização deste computador. A desinstalação também oferece isso.
 - Em [myaccount.google.com/permissions](https://myaccount.google.com/permissions), a pessoa revoga o acesso do programa.
 - Os arquivos enviados ficam no Drive da pessoa, que pode apagá-los quando quiser.
 

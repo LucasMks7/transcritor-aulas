@@ -27,6 +27,8 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pypdf>=5"]
+# Monta o programa para quem não tem Python. Veja docs/instalador.md.
+instalador = ["pyinstaller>=6.22; sys_platform == 'win32'"]
 # Bibliotecas do CUDA para transcrever na placa de vídeo da NVIDIA. Ocupam cerca
 # de 2 GB, por isso ficam de fora da instalação padrão. O CTranslate2 4.x usa o
 # CUDA 12 e o cuDNN 9.

@@ -45,7 +45,16 @@ def pasta_de_configuracao() -> Path:
 def caminho_do_client_secret() -> Path:
     # A variável de ambiente serve para testes e para quem guarda o arquivo em outro lugar.
     escolhido = os.environ.get("TRANSCRITOR_CLIENT_SECRET")
-    return Path(escolhido) if escolhido else pasta_de_configuracao() / "client_secret.json"
+    if escolhido:
+        return Path(escolhido)
+    da_pessoa = pasta_de_configuracao() / "client_secret.json"
+    # O instalador pode trazer o arquivo ao lado do executável. O da pessoa vem
+    # antes, para quem preferir usar o próprio projeto do Google Cloud.
+    if getattr(sys, "frozen", False) and not da_pessoa.is_file():
+        do_instalador = Path(sys.executable).parent / "client_secret.json"
+        if do_instalador.is_file():
+            return do_instalador
+    return da_pessoa
 
 
 def caminho_do_token() -> Path:

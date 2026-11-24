@@ -2,6 +2,7 @@
 
 import os
 import queue
+import sys
 import threading
 import tkinter as tk
 import webbrowser
@@ -526,6 +527,12 @@ class Janela:
 
 
 def main() -> None:
+    # Sem terminal, o Windows deixa os dois fluxos como None, e uma biblioteca que
+    # tente escrever neles derrubaria o programa.
+    if sys.stdout is None:
+        sys.stdout = open(os.devnull, "w", encoding="utf-8")
+    if sys.stderr is None:
+        sys.stderr = open(os.devnull, "w", encoding="utf-8")
     raiz = tk.Tk()
     Janela(raiz)
     raiz.mainloop()

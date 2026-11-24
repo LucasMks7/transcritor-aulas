@@ -1,6 +1,7 @@
 """Autorização do Drive com dublês no lugar do Google: nada sai do PC."""
 
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -266,3 +267,35 @@ def test_comando_desconectar(monkeypatch, capsys, tmp_path):
     assert drive.main(["desconectar"]) == 0
 
     assert "Não havia autorização" in capsys.readouterr().out
+
+
+@pytest.fixture
+def instalado(monkeypatch, tmp_path):
+    """O programa instalado, com o executável em uma pasta própria."""
+    pasta = tmp_path / "programa"
+    pasta.mkdir()
+    monkeypatch.delenv("TRANSCRITOR_CLIENT_SECRET", raising=False)
+    monkeypatch.setattr(sys, "frozen", True, raising=False)
+    monkeypatch.setattr(sys, "executable", str(pasta / "Transcritor.exe"))
+    return pasta
+
+
+def test_instalado_usa_o_client_secret_do_instalador(instalado):
+    (instalado / "client_secret.json").write_text("{}", encoding="utf-8")
+
+    assert drive.caminho_do_client_secret() == instalado / "client_secret.json"
+
+
+def test_o_client_secret_da_pessoa_vem_antes_do_instalador(instalado):
+    (instalado / "client_secret.json").write_text("{}", encoding="utf-8")
+    da_pessoa = drive.pasta_de_configuracao() / "client_secret.json"
+    da_pessoa.parent.mkdir(parents=True, exist_ok=True)
+    da_pessoa.write_text("{}", encoding="utf-8")
+
+    assert drive.caminho_do_client_secret() == da_pessoa
+
+
+def test_instalador_sem_client_secret_aponta_para_a_pasta_da_pessoa(instalado):
+    esperado = drive.pasta_de_configuracao() / "client_secret.json"
+
+    assert drive.caminho_do_client_secret() == esperado

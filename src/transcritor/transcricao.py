@@ -1,5 +1,6 @@
 """Transcrição de áudio com o faster-whisper, feita inteira no próprio PC."""
 
+import ctypes.util
 import os
 import sys
 from collections.abc import Callable
@@ -24,6 +25,13 @@ MODELO_PADRAO = {"cuda": "large-v3-turbo", "cpu": "small"}
 # int8 foi o mais rápido nos dois. Na GTX 1050 Ti, o float32 do large-v3-turbo
 # não cabe bem nos 4 GB e fica cinco vezes mais lento.
 TIPOS_DE_CALCULO = {"cpu": "int8", "cuda": "int8"}
+
+# O pip não existe no programa instalado, onde a placa ainda não é usada.
+FALTAM_AS_BIBLIOTECAS = "faltam as bibliotecas da NVIDIA" + (
+    ", que não vêm no instalador"
+    if getattr(sys, "frozen", False)
+    else ': instale com pip install ".[gpu]"'
+)
 
 # O Whisper trabalha com áudio a 16 kHz, em um canal só.
 TAXA_DE_AMOSTRAGEM = 16_000
@@ -107,7 +115,21 @@ def _contar_gpus() -> int:
     preparar_bibliotecas_cuda()
     import ctranslate2
 
-    return ctranslate2.get_cuda_device_count()
+    quantidade = ctranslate2.get_cuda_device_count()
+    if quantidade and not _ha_cublas():
+        raise _SemGpu(FALTAM_AS_BIBLIOTECAS)
+    return quantidade
+
+
+def _ha_cublas() -> bool:
+    """Se o Windows acha o cuBLAS. Nos outros sistemas, só o teste do modelo diz.
+
+    Conferir antes poupa o download de 1,5 GB do modelo da placa em um PC que
+    tem a placa e não tem as bibliotecas, como o de quem usa o instalador.
+    """
+    if sys.platform != "win32":
+        return True
+    return ctypes.util.find_library("cublas64_12.dll") is not None
 
 
 def preparar_bibliotecas_cuda() -> None:
@@ -187,6 +209,8 @@ def _carregar_na_gpu(
 ) -> Modelo:
     try:
         quantidade = contar_gpus()
+    except _SemGpu:
+        raise
     except Exception as erro:
         raise _SemGpu(f"o CTranslate2 não conseguiu procurar a placa ({erro})") from erro
     if quantidade == 0:
@@ -201,7 +225,7 @@ def _carregar_na_gpu(
     except RuntimeError as erro:
         motivo = f"a placa foi encontrada, mas não conseguiu transcrever ({erro})"
         if "cublas" in str(erro).lower() or "cudnn" in str(erro).lower():
-            motivo += '. Faltam as bibliotecas da NVIDIA: instale com pip install ".[gpu]"'
+            motivo += f"; {FALTAM_AS_BIBLIOTECAS}"
         raise _SemGpu(motivo) from erro
     except Exception as erro:
         raise _erro_ao_carregar(nome, erro) from erro
